@@ -1,30 +1,31 @@
-import sys
 import time
 import threading
+import sys
 from typing import Any, Dict, List, Tuple, Optional
 
 import requests
 from openpyxl import load_workbook
 
-# ================== CONFIG ==================
 GPM_API = "http://127.0.0.1:19995"
 EXCEL_PATH = "proxies.xlsx"
 START_ROW = 2
 
 GROUP_NAME = "All"
-BROWSER_CORE = "chromium"   # ✅ docs: chromium / firefox
+BROWSER_CORE = "chromium"
 BROWSER_NAME = "Chrome"
 
 THREADS = 3
 REQUEST_TIMEOUT = 30
 
-# Start window options (optional)
-START_WIN_SCALE = None   # e.g. 0.8
-START_WIN_POS = None     # e.g. "300,300"
-START_WIN_SIZE = None    # e.g. "1200,800"
+SCREEN_W = 1920
+SCREEN_H = 1080
+TASKBAR_H = 40
+GAP = 4
+
+START_WIN_SCALE = None
+START_WIN_SIZE = "640,520"
 
 print_lock = threading.Lock()
-
 
 def safe_print(*args):
     with print_lock:
@@ -35,7 +36,7 @@ def menu_multi_select():
     import msvcrt
     import os
 
-    options = ["Create profile", "Start profile", "Import cookie", "Exit"]
+    options = ["Create profile", "Start profile", "Close profile", "Import cookie", "Exit"]
     selected = [False] * len(options)
     current = 0
 
@@ -50,9 +51,9 @@ def menu_multi_select():
     while True:
         draw()
         key = msvcrt.getch()
-        if key == b"\x1b":
+        if key == b"\x1b":  # ESC
             sys.exit(0)
-        if key == b"\r":
+        if key == b"\r":  # ENTER
             return selected
         if key == b" ":
             selected[current] = not selected[current]
@@ -64,45 +65,35 @@ def menu_multi_select():
                 current = (current + 1) % len(options)
 
 
-# ================== API ==================
-def _json_or_error(r: requests.Response, url: str) -> Dict[str, Any]:
+def _json_or_throw(r: requests.Response, url: str) -> Dict[str, Any]:
     try:
         return r.json()
     except Exception:
         snippet = (r.text or "").strip().replace("\r", " ").replace("\n", " ")[:400]
         raise RuntimeError(f"API non-JSON (HTTP {r.status_code}) {url}: {snippet}")
 
-
 def api_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     url = f"{GPM_API}{path}"
     r = requests.get(url, params=params or {}, timeout=REQUEST_TIMEOUT)
-    return _json_or_error(r, url)
-
+    return _json_or_throw(r, url)
 
 def api_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{GPM_API}{path}"
     r = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-    return _json_or_error(r, url)
-
+    return _json_or_throw(r, url)
 
 def normalize_proxy(raw: Any) -> str:
-    """
-    Docs show Socks5 as: socks5://IP:Port:User:Pass
-    Your input often: user:pass@host:port  -> convert to socks5://host:port:user:pass
-    """
     if not raw:
         return ""
     s = str(raw).strip()
     if not s:
         return ""
 
-    # strip scheme if present
     if "://" in s:
         _, rest = s.split("://", 1)
     else:
         rest = s
 
-    # user:pass@host:port
     if "@" in rest:
         user_pass, host_port = rest.split("@", 1)
         if ":" in user_pass and ":" in host_port:
@@ -110,27 +101,54 @@ def normalize_proxy(raw: Any) -> str:
             host, port = host_port.split(":", 1)
             return f"socks5://{host}:{port}:{user}:{password}"
 
-    # host:port:user:pass
     parts = rest.split(":")
     if len(parts) == 4:
         host, port, user, password = parts
         return f"socks5://{host}:{port}:{user}:{password}"
 
-    # host:port
     if len(parts) == 2:
         return "socks5://" + rest
 
     return s
 
 
-# ================== GPM ==================
+# ======= NEW: compute non-overlap window position =======
+def _parse_win_size(win_size: str) -> Tuple[int, int]:
+    w, h = win_size.split(",", 1)
+    return int(w.strip()), int(h.strip())
+
+def compute_win_pos(index: int) -> str:
+    win_w, win_h = _parse_win_size(START_WIN_SIZE)
+
+    usable_w = SCREEN_W
+    usable_h = SCREEN_H - TASKBAR_H
+
+    cols = max(1, (usable_w + GAP) // (win_w + GAP))
+    rows = max(1, (usable_h + GAP) // (win_h + GAP))
+    per_page = cols * rows
+
+    slot = index % per_page
+    col = slot % cols
+    row = slot // cols
+
+    x = col * (win_w + GAP)
+    y = row * (win_h + GAP)
+
+    # đảm bảo không vượt biên
+    x = min(x, max(0, usable_w - win_w))
+    y = min(y, max(0, usable_h - win_h))
+
+    return f"{x},{y}"
+
+
+# ================== GPM Actions ==================
 def create_profile(profile_name: str, raw_proxy: str) -> str:
     payload = {
         "profile_name": profile_name,
         "group_name": GROUP_NAME,
         "browser_core": BROWSER_CORE,
         "browser_name": BROWSER_NAME,
-        "is_random_browser_version": True,  # ✅ let GPM auto
+        "is_random_browser_version": True,
         "raw_proxy": raw_proxy or "",
         "startup_urls": "",
     }
@@ -139,13 +157,7 @@ def create_profile(profile_name: str, raw_proxy: str) -> str:
         raise RuntimeError(resp.get("message") or str(resp))
     return resp["data"]["id"]
 
-
 def find_profile_id_by_name(profile_name: str, group_id: Optional[str] = None) -> str:
-    """
-    Use list profiles API:
-      GET /api/v3/profiles?search=<keyword>&page=1&per_page=50
-    Response items include id and name. :contentReference[oaicite:4]{index=4}
-    """
     params: Dict[str, Any] = {"search": profile_name, "page": 1, "per_page": 50, "sort": 2}
     if group_id:
         params["group_id"] = group_id
@@ -155,36 +167,37 @@ def find_profile_id_by_name(profile_name: str, group_id: Optional[str] = None) -
         raise RuntimeError(resp.get("message") or str(resp))
 
     items = resp.get("data") or []
-    # Prefer exact name match first
+
     for it in items:
         if str(it.get("name", "")).strip() == profile_name:
             pid = it.get("id")
             if pid:
                 return pid
 
-    # fallback: first item if only 1
     if len(items) == 1 and items[0].get("id"):
         return items[0]["id"]
 
-    raise RuntimeError(f"Cannot find unique profile id for name={profile_name!r} (found {len(items)} matches)")
+    raise RuntimeError(f"Cannot find unique profile id for name={profile_name!r} (matches={len(items)})")
 
-
-def start_profile_by_id(profile_id: str) -> Dict[str, Any]:
+def start_profile_by_id(profile_id: str, index: int) -> Dict[str, Any]:
     params = {}
+
     if START_WIN_SCALE is not None:
         params["win_scale"] = START_WIN_SCALE
-    if START_WIN_POS:
-        params["win_pos"] = START_WIN_POS
-    if START_WIN_SIZE:
-        params["win_size"] = START_WIN_SIZE
 
-    resp = api_get(f"/api/v3/profiles/start/{profile_id}", params=params)  # :contentReference[oaicite:5]{index=5}
+    params["win_size"] = START_WIN_SIZE
+    params["win_pos"] = compute_win_pos(index)  # <<<<<< key point
+
+    resp = api_get(f"/api/v3/profiles/start/{profile_id}", params=params)
     if not resp.get("success"):
         raise RuntimeError(resp.get("message") or str(resp))
     return resp.get("data", {})
 
+def close_profile_by_id(profile_id: str) -> None:
+    resp = api_get(f"/api/v3/profiles/close/{profile_id}")
+    if not resp.get("success"):
+        raise RuntimeError(resp.get("message") or str(resp))
 
-# ================== EXCEL ==================
 def read_excel() -> List[Tuple[str, Any, Any]]:
     wb = load_workbook(EXCEL_PATH)
     ws = wb.active
@@ -198,12 +211,10 @@ def read_excel() -> List[Tuple[str, Any, Any]]:
             idx += 1
     return rows
 
-
 # ================== WORKER ==================
 def process_row(profile_name, cookie_cell, proxy_cell, index, actions):
     raw_proxy = normalize_proxy(proxy_cell)
 
-    # Create (optional)
     if actions["create"]:
         try:
             pid = create_profile(profile_name, raw_proxy)
@@ -212,24 +223,34 @@ def process_row(profile_name, cookie_cell, proxy_cell, index, actions):
             safe_print(f"❌ Create failed {profile_name}: {e}")
             return
 
-    # Start (optional)
     if actions["start"]:
         try:
-            pid = find_profile_id_by_name(profile_name)  # name -> id via list profiles :contentReference[oaicite:6]{index=6}
-            data = start_profile_by_id(pid)              # start/{id} :contentReference[oaicite:7]{index=7}
-            safe_print(f"✅ Started {profile_name} (id={pid}) | remote={data.get('remote_debugging_address')}")
+            pid = find_profile_id_by_name(profile_name)
+            data = start_profile_by_id(pid, index)  # << pass index
+            safe_print(f"✅ Started {profile_name} (id={pid}) | pos={compute_win_pos(index)} | remote={data.get('remote_debugging_address')}")
         except Exception as e:
             safe_print(f"❌ Start failed {profile_name}: {e}")
 
+    if actions["close"]:
+        try:
+            pid = find_profile_id_by_name(profile_name)
+            close_profile_by_id(pid)
+            safe_print(f"✅ Closed {profile_name} (id={pid})")
+        except Exception as e:
+            safe_print(f"❌ Close failed {profile_name}: {e}")
 
 def main():
     rows = read_excel()
     selected = menu_multi_select()
-    if selected[3]:
+    if selected[4]:
         return
 
-    actions = {"create": selected[0], "start": selected[1], "import": selected[2]}
-    safe_print("▶ ACTIONS:", actions)
+    actions = {
+        "create": selected[0],
+        "start": selected[1],
+        "close": selected[2],
+        "import": selected[3],
+    }
 
     threads = []
     for i, row in enumerate(rows):
@@ -244,7 +265,6 @@ def main():
         t.join()
 
     safe_print("✅ ALL DONE")
-
 
 if __name__ == "__main__":
     main()
