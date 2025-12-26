@@ -1,4 +1,7 @@
 proxies.txt
+*.txt
+*.xlsx
+*.xpi
 profiles
 storage_state
 logs
