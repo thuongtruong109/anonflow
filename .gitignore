@@ -1,1 +1,5 @@
 proxies.txt
+profiles
+storage_state
+logs
+__pycache__
