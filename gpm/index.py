@@ -1,20 +1,23 @@
-import time
-import threading
 import sys
-from typing import Any, Dict, List, Tuple, Optional
+import threading
+from typing import Any, Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from openpyxl import load_workbook
 
+# ================= CONFIG =================
 GPM_API = "http://127.0.0.1:19995"
 EXCEL_PATH = "proxies.xlsx"
-START_ROW = 2
 
 GROUP_NAME = "All"
 BROWSER_CORE = "chromium"
 BROWSER_NAME = "Chrome"
 
-THREADS = 3
+THREADS = 6
+START_LIMIT = 3
 REQUEST_TIMEOUT = 30
 
 SCREEN_W = 1920
@@ -24,186 +27,129 @@ GAP = 4
 
 START_WIN_SCALE = None
 START_WIN_SIZE = "640,520"
+# =========================================
 
 print_lock = threading.Lock()
-
 def safe_print(*args):
     with print_lock:
         print(*args)
 
+# ================= HTTP =================
+def build_session():
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=0.3,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST")
+    )
+    adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retry)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
 
-def menu_multi_select():
-    import msvcrt
-    import os
+thread_local = threading.local()
+def get_session():
+    if not hasattr(thread_local, "session"):
+        thread_local.session = build_session()
+    return thread_local.session
 
-    options = ["Create profile", "Start profile", "Close profile", "Import cookie", "Exit"]
-    selected = [False] * len(options)
-    current = 0
+def api_get(path, params=None):
+    r = get_session().get(f"{GPM_API}{path}", params=params or {}, timeout=REQUEST_TIMEOUT)
+    return r.json()
 
-    def draw():
-        os.system("cls")
-        print("Menu: ↑ ↓ move | SPACE select | ENTER run | ESC exit\n")
-        for i, opt in enumerate(options):
-            cursor = "➤" if i == current else " "
-            mark = "[x]" if selected[i] else "[ ]"
-            print(f"{cursor} {mark} {opt}")
+def api_post(path, payload):
+    r = get_session().post(f"{GPM_API}{path}", json=payload, timeout=REQUEST_TIMEOUT)
+    return r.json()
 
-    while True:
-        draw()
-        key = msvcrt.getch()
-        if key == b"\x1b":  # ESC
-            sys.exit(0)
-        if key == b"\r":  # ENTER
-            return selected
-        if key == b" ":
-            selected[current] = not selected[current]
-        if key in (b"\xe0", b"\x00"):
-            key2 = msvcrt.getch()
-            if key2 == b"H":
-                current = (current - 1) % len(options)
-            elif key2 == b"P":
-                current = (current + 1) % len(options)
+# ================= WINDOW =================
+def compute_win_pos(index):
+    w, h = map(int, START_WIN_SIZE.split(","))
+    usable_h = SCREEN_H - TASKBAR_H
+    cols = max(1, SCREEN_W // (w + GAP))
+    x = (index % cols) * (w + GAP)
+    y = (index // cols) * (h + GAP)
+    return f"{x},{min(y, usable_h - h)}"
 
-
-def _json_or_throw(r: requests.Response, url: str) -> Dict[str, Any]:
-    try:
-        return r.json()
-    except Exception:
-        snippet = (r.text or "").strip().replace("\r", " ").replace("\n", " ")[:400]
-        raise RuntimeError(f"API non-JSON (HTTP {r.status_code}) {url}: {snippet}")
-
-def api_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    url = f"{GPM_API}{path}"
-    r = requests.get(url, params=params or {}, timeout=REQUEST_TIMEOUT)
-    return _json_or_throw(r, url)
-
-def api_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    url = f"{GPM_API}{path}"
-    r = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-    return _json_or_throw(r, url)
-
-def normalize_proxy(raw: Any) -> str:
+# ================= PROXY =================
+def normalize_proxy(raw):
     if not raw:
         return ""
     s = str(raw).strip()
-    if not s:
-        return ""
-
     if "://" in s:
-        _, rest = s.split("://", 1)
-    else:
-        rest = s
-
-    if "@" in rest:
-        user_pass, host_port = rest.split("@", 1)
-        if ":" in user_pass and ":" in host_port:
-            user, password = user_pass.split(":", 1)
-            host, port = host_port.split(":", 1)
-            return f"socks5://{host}:{port}:{user}:{password}"
-
-    parts = rest.split(":")
+        s = s.split("://", 1)[1]
+    if "@" in s:
+        up, hp = s.split("@", 1)
+        u, p = up.split(":", 1)
+        h, po = hp.split(":", 1)
+        return f"socks5://{h}:{po}:{u}:{p}"
+    parts = s.split(":")
     if len(parts) == 4:
-        host, port, user, password = parts
-        return f"socks5://{host}:{port}:{user}:{password}"
-
+        h, po, u, p = parts
+        return f"socks5://{h}:{po}:{u}:{p}"
     if len(parts) == 2:
-        return "socks5://" + rest
-
+        return "socks5://" + s
     return s
 
+# ================= PROFILE API =================
+profile_cache = {}
+cache_lock = threading.Lock()
+start_sem = threading.Semaphore(START_LIMIT)
 
-# ======= NEW: compute non-overlap window position =======
-def _parse_win_size(win_size: str) -> Tuple[int, int]:
-    w, h = win_size.split(",", 1)
-    return int(w.strip()), int(h.strip())
-
-def compute_win_pos(index: int) -> str:
-    win_w, win_h = _parse_win_size(START_WIN_SIZE)
-
-    usable_w = SCREEN_W
-    usable_h = SCREEN_H - TASKBAR_H
-
-    cols = max(1, (usable_w + GAP) // (win_w + GAP))
-    rows = max(1, (usable_h + GAP) // (win_h + GAP))
-    per_page = cols * rows
-
-    slot = index % per_page
-    col = slot % cols
-    row = slot // cols
-
-    x = col * (win_w + GAP)
-    y = row * (win_h + GAP)
-
-    # đảm bảo không vượt biên
-    x = min(x, max(0, usable_w - win_w))
-    y = min(y, max(0, usable_h - win_h))
-
-    return f"{x},{y}"
-
-
-# ================== GPM Actions ==================
-def create_profile(profile_name: str, raw_proxy: str) -> str:
-    payload = {
-        "profile_name": profile_name,
+def create_profile(name, proxy):
+    r = api_post("/api/v3/profiles/create", {
+        "profile_name": name,
         "group_name": GROUP_NAME,
         "browser_core": BROWSER_CORE,
         "browser_name": BROWSER_NAME,
         "is_random_browser_version": True,
-        "raw_proxy": raw_proxy or "",
-        "startup_urls": "",
-    }
-    resp = api_post("/api/v3/profiles/create", payload)
-    if not resp.get("success") or not resp.get("data"):
-        raise RuntimeError(resp.get("message") or str(resp))
-    return resp["data"]["id"]
+        "raw_proxy": proxy,
+        "startup_urls": ""
+    })
+    return r["data"]["id"]
 
-def find_profile_id_by_name(profile_name: str, group_id: Optional[str] = None) -> str:
-    params: Dict[str, Any] = {"search": profile_name, "page": 1, "per_page": 50, "sort": 2}
-    if group_id:
-        params["group_id"] = group_id
+def get_profile_id(name):
+    with cache_lock:
+        if name in profile_cache:
+            return profile_cache[name]
 
-    resp = api_get("/api/v3/profiles", params=params)
-    if not resp.get("success"):
-        raise RuntimeError(resp.get("message") or str(resp))
+    r = api_get("/api/v3/profiles", {
+        "search": name,
+        "page": 1,
+        "per_page": 50,
+        "sort": 2
+    })
+    for it in r.get("data", []):
+        if it.get("name") == name:
+            pid = it["id"]
+            with cache_lock:
+                profile_cache[name] = pid
+            return pid
+    raise RuntimeError("Profile not found")
 
-    items = resp.get("data") or []
+def start_profile(pid, index):
+    with start_sem:
+        params = {
+            "win_size": START_WIN_SIZE,
+            "win_pos": compute_win_pos(index)
+        }
+        if START_WIN_SCALE is not None:
+            params["win_scale"] = START_WIN_SCALE
+        api_get(f"/api/v3/profiles/start/{pid}", params)
 
-    for it in items:
-        if str(it.get("name", "")).strip() == profile_name:
-            pid = it.get("id")
-            if pid:
-                return pid
+def close_profile(pid):
+    api_get(f"/api/v3/profiles/close/{pid}")
 
-    if len(items) == 1 and items[0].get("id"):
-        return items[0]["id"]
+def delete_profile(pid):
+    api_post("/api/v3/profiles/delete", {"ids": [pid]})
 
-    raise RuntimeError(f"Cannot find unique profile id for name={profile_name!r} (matches={len(items)})")
-
-def start_profile_by_id(profile_id: str, index: int) -> Dict[str, Any]:
-    params = {}
-
-    if START_WIN_SCALE is not None:
-        params["win_scale"] = START_WIN_SCALE
-
-    params["win_size"] = START_WIN_SIZE
-    params["win_pos"] = compute_win_pos(index)  # <<<<<< key point
-
-    resp = api_get(f"/api/v3/profiles/start/{profile_id}", params=params)
-    if not resp.get("success"):
-        raise RuntimeError(resp.get("message") or str(resp))
-    return resp.get("data", {})
-
-def close_profile_by_id(profile_id: str) -> None:
-    resp = api_get(f"/api/v3/profiles/close/{profile_id}")
-    if not resp.get("success"):
-        raise RuntimeError(resp.get("message") or str(resp))
-
-def read_excel() -> List[Tuple[str, Any, Any]]:
-    wb = load_workbook(EXCEL_PATH)
+# ================= EXCEL =================
+def read_excel():
+    wb = load_workbook(EXCEL_PATH, read_only=True, data_only=True)
     ws = wb.active
     rows = []
     idx = 1
-    for r in range(START_ROW, ws.max_row + 1):
+    for r in range(2, ws.max_row + 1):
         cookie = ws.cell(r, 1).value
         proxy = ws.cell(r, 2).value
         if cookie or proxy:
@@ -211,58 +157,91 @@ def read_excel() -> List[Tuple[str, Any, Any]]:
             idx += 1
     return rows
 
-# ================== WORKER ==================
-def process_row(profile_name, cookie_cell, proxy_cell, index, actions):
-    raw_proxy = normalize_proxy(proxy_cell)
+# ================= WORKER =================
+def process_row(name, cookie, proxy_raw, index, actions):
+    try:
+        proxy = normalize_proxy(proxy_raw)
 
-    if actions["create"]:
-        try:
-            pid = create_profile(profile_name, raw_proxy)
-            safe_print(f"✅ Created {profile_name} (id={pid})")
-        except Exception as e:
-            safe_print(f"❌ Create failed {profile_name}: {e}")
-            return
+        if actions["create"]:
+            pid = create_profile(name, proxy)
+            safe_print(f"✅ Created {name}")
+        else:
+            pid = get_profile_id(name)
 
-    if actions["start"]:
-        try:
-            pid = find_profile_id_by_name(profile_name)
-            data = start_profile_by_id(pid, index)  # << pass index
-            safe_print(f"✅ Started {profile_name} (id={pid}) | pos={compute_win_pos(index)} | remote={data.get('remote_debugging_address')}")
-        except Exception as e:
-            safe_print(f"❌ Start failed {profile_name}: {e}")
+        if actions["start"]:
+            start_profile(pid, index)
+            safe_print(f"✅ Started {name}")
 
-    if actions["close"]:
-        try:
-            pid = find_profile_id_by_name(profile_name)
-            close_profile_by_id(pid)
-            safe_print(f"✅ Closed {profile_name} (id={pid})")
-        except Exception as e:
-            safe_print(f"❌ Close failed {profile_name}: {e}")
+        if actions["import"]:
+            pass  # giữ chỗ cho import cookie sau
 
+        if actions["close"]:
+            close_profile(pid)
+            safe_print(f"✅ Closed {name}")
+
+        if actions["delete"]:
+            delete_profile(pid)
+            safe_print(f"🗑️ Deleted {name}")
+
+    except Exception as e:
+        safe_print(f"❌ {name}: {e}")
+
+# ================= MENU =================
+def menu_multi_select():
+    import msvcrt, os
+    opts = [
+        "Create profiles",
+        "Start profiles",
+        "Import cookies",
+        "Close profiles",
+        "Delete profiles",
+        "Exit"
+    ]
+    sel = [False] * len(opts)
+    cur = 0
+
+    while True:
+        os.system("cls")
+        print("↑ ↓ move | SPACE select | ENTER run | ESC exit\n")
+        for i, o in enumerate(opts):
+            print(("➤" if i == cur else " "), "[x]" if sel[i] else "[ ]", o)
+
+        k = msvcrt.getch()
+        if k == b"\x1b":
+            sys.exit(0)
+        if k == b"\r":
+            return sel
+        if k == b" ":
+            sel[cur] = not sel[cur]
+        if k in (b"\xe0", b"\x00"):
+            k2 = msvcrt.getch()
+            if k2 == b"H":
+                cur = (cur - 1) % len(opts)
+            elif k2 == b"P":
+                cur = (cur + 1) % len(opts)
+
+# ================= MAIN =================
 def main():
     rows = read_excel()
-    selected = menu_multi_select()
-    if selected[4]:
+    sel = menu_multi_select()
+    if sel[5]:
         return
 
     actions = {
-        "create": selected[0],
-        "start": selected[1],
-        "close": selected[2],
-        "import": selected[3],
+        "create": sel[0],
+        "start": sel[1],
+        "import": sel[2],
+        "close": sel[3],
+        "delete": sel[4]
     }
 
-    threads = []
-    for i, row in enumerate(rows):
-        t = threading.Thread(target=process_row, args=(*row, i, actions), daemon=True)
-        t.start()
-        threads.append(t)
-
-        while threading.active_count() > THREADS:
-            time.sleep(0.2)
-
-    for t in threads:
-        t.join()
+    with ThreadPoolExecutor(max_workers=THREADS) as ex:
+        futures = [
+            ex.submit(process_row, *row, i, actions)
+            for i, row in enumerate(rows)
+        ]
+        for _ in as_completed(futures):
+            pass
 
     safe_print("✅ ALL DONE")
 
