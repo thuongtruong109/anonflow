@@ -1,16 +1,13 @@
-import sys
-import threading
+import sys, threading, os, requests
 from typing import Any, Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import load_workbook
 
-# ================= CONFIG =================
 GPM_API = "http://127.0.0.1:19995"
 EXCEL_PATH = "proxies.xlsx"
+COOKIES_DIR = "cookies"
 
 GROUP_NAME = "All"
 BROWSER_CORE = "chromium"
@@ -27,14 +24,12 @@ GAP = 4
 
 START_WIN_SCALE = None
 START_WIN_SIZE = "640,520"
-# =========================================
 
 print_lock = threading.Lock()
 def safe_print(*args):
     with print_lock:
         print(*args)
 
-# ================= HTTP =================
 def build_session():
     s = requests.Session()
     retry = Retry(
@@ -140,24 +135,85 @@ def start_profile(pid, index):
 def close_profile(pid):
     api_get(f"/api/v3/profiles/close/{pid}")
 
-def delete_profile(pid):
-    api_post("/api/v3/profiles/delete", {"ids": [pid]})
+def delete_profile(pid: str):
+    r = api_get(f"/api/v3/profiles/delete/{pid}", {"mode": 2})
 
-# ================= EXCEL =================
+    if isinstance(r, dict) and (r.get("success") is False):
+        raise RuntimeError(r.get("message") or f"Delete failed for {pid}")
+
+    return r
+
+# ================= COOKIES AND EXCEL =================
+def list_cookie_filepaths(folder: str) -> list[str]:
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(f"Cookies folder not found: {folder}")
+
+    files = []
+    for name in os.listdir(folder):
+        full = os.path.join(folder, name)
+        if os.path.isfile(full):
+            files.append(os.path.abspath(full))
+
+    files.sort(key=lambda p: os.path.basename(p).lower())
+    return files
+
+def update_excel_column_a_with_cookie_files(
+    excel_path: str,
+    cookies_folder: str,
+    sheet_name: str | None = None,
+    start_row: int = 2,
+):
+    cookie_paths = list_cookie_filepaths(cookies_folder)
+
+    wb = load_workbook(excel_path)
+    ws = wb[sheet_name] if sheet_name else wb.active
+
+    row = start_row
+    for fpath in cookie_paths:
+        ws.cell(row=row, column=1).value = fpath
+        row += 1
+
+    wb.save(excel_path)
+    return len(cookie_paths)
+
+def count_proxy_rows(
+    excel_path: str,
+    sheet_name: str | None = None,
+    start_row: int = 2,
+    proxy_col: int = 2,
+) -> int:
+    wb = load_workbook(excel_path, read_only=True, data_only=True)
+    ws = wb[sheet_name] if sheet_name else wb.active
+
+    cnt = 0
+    for r in range(start_row, ws.max_row + 1):
+        v = ws.cell(r, proxy_col).value
+        if v is None:
+            continue
+        if str(v).strip() == "":
+            continue
+        cnt += 1
+    return cnt
+
 def read_excel():
     wb = load_workbook(EXCEL_PATH, read_only=True, data_only=True)
     ws = wb.active
     rows = []
-    idx = 1
+
     for r in range(2, ws.max_row + 1):
-        cookie = ws.cell(r, 1).value
+        cookie_path = ws.cell(r, 1).value
         proxy = ws.cell(r, 2).value
-        if cookie or proxy:
-            rows.append((f"Profile {idx}", cookie, proxy))
-            idx += 1
+
+        if proxy is None or str(proxy).strip() == "":
+            continue
+
+        cookie_path_str = str(cookie_path).strip() if cookie_path else ""
+        profile_name = os.path.basename(cookie_path_str) if cookie_path_str else f"Profile {r-1}"
+
+        rows.append((profile_name, cookie_path_str, proxy))
+
     return rows
 
-# ================= WORKER =================
 def process_row(name, cookie, proxy_raw, index, actions):
     try:
         proxy = normalize_proxy(proxy_raw)
@@ -173,7 +229,7 @@ def process_row(name, cookie, proxy_raw, index, actions):
             safe_print(f"✅ Started {name}")
 
         if actions["import"]:
-            pass  # giữ chỗ cho import cookie sau
+            pass
 
         if actions["close"]:
             close_profile(pid)
@@ -220,8 +276,13 @@ def menu_multi_select():
             elif k2 == b"P":
                 cur = (cur + 1) % len(opts)
 
-# ================= MAIN =================
 def main():
+    try:
+        n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
+        safe_print(f"✅ Updated {n} cookie paths into column A")
+    except Exception as e:
+        safe_print(f"❌ Update cookies->excel failed: {e}")
+
     rows = read_excel()
     sel = menu_multi_select()
     if sel[5]:
