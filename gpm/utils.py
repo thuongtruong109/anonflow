@@ -1,12 +1,14 @@
 from __future__ import annotations
 import os, sys
 from typing import List
-
 from config import print_lock, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
+from logger import setup_logger
+
+log = setup_logger()
 
 def safe_print(*args):
     with print_lock:
-        print(*args)
+        log.info(" ".join(map(str, args)))
 
 def compute_win_pos(index: int) -> str:
     w, h = map(int, START_WIN_SIZE.split(","))
@@ -53,10 +55,10 @@ def menu_multi_select():
     opts = [
         "Create profiles",
         "Start profiles",
+        "Attach CDP",
         "Import cookies",
         "Close profiles",
         "Delete profiles",
-        "Attach Playwright (CDP) & Run",
         "Exit"
     ]
     sel = [False] * len(opts)

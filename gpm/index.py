@@ -63,10 +63,10 @@ def main():
     actions = {
         "create": sel[0],
         "start": sel[1],
-        "import": sel[2],
-        "close": sel[3],
-        "delete": sel[4],
-        "pw": sel[5],
+        "pw": sel[2],
+        "import": sel[3],
+        "close": sel[4],
+        "delete": sel[5],
     }
 
     with started_lock:

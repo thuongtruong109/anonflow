@@ -43,11 +43,9 @@ if not logger.handlers:
     _file.setFormatter(_fmt)
     logger.addHandler(_file)
 
-
 def load_proxies() -> List[str]:
     with open(PROXIES_FILE, encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
-
 
 def parse_proxy(proxy_str: str) -> Optional[Dict[str, str]]:
     parts = proxy_str.split(":")
@@ -57,7 +55,6 @@ def parse_proxy(proxy_str: str) -> Optional[Dict[str, str]]:
     ip, port, user, pwd = parts
     return {"server": f"http://{ip}:{port}", "username": user, "password": pwd}
 
-
 def grid_position(index0: int) -> Tuple[int, int]:
     col = index0 % GRID_COLS
     row = index0 // GRID_COLS
@@ -65,10 +62,8 @@ def grid_position(index0: int) -> Tuple[int, int]:
     y = MARGIN_Y + row * (WINDOW_H + GAP_Y)
     return x, y
 
-
 def profile_path_for(index1: int) -> Path:
     return PROFILES_DIR / f"proxy_{index1:03d}"
-
 
 async def run_proxy(playwright, proxy: Dict[str, str], index1: int) -> None:
     idx0 = index1 - 1
@@ -121,7 +116,6 @@ async def run_proxy(playwright, proxy: Dict[str, str], index1: int) -> None:
                 pass
             logger.info("[PROXY %s] CLOSED", index1)
 
-
 async def main():
     proxies_raw = load_proxies()
     proxies: List[Dict[str, str]] = []
@@ -151,7 +145,6 @@ async def main():
         await asyncio.gather(*(limited_run(px, i + 1) for i, px in enumerate(proxies)))
 
     logger.info("DONE ALL TASKS")
-
 
 if __name__ == "__main__":
     asyncio.run(main())

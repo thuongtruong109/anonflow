@@ -43,7 +43,6 @@ async def _run_browser_one(p, name: str, addr: str):
         # await page.goto("https://whoer.net", wait_until="domcontentloaded")
 
         await run_tiktok_flow(page)
-        safe_print(f"✅ [PW] {name}: done")
 
     except Exception as e:
         safe_print(f"❌ [PW] {name}: {e}")
