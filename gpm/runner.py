@@ -1,0 +1,50 @@
+import asyncio, requests
+from typing import List, Tuple
+
+from playwright.async_api import async_playwright
+from utils import safe_print
+
+async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float = 0.5) -> bool:
+    url = http_base.rstrip("/") + "/json/version"
+
+    def _try_once() -> bool:
+        try:
+            rr = requests.get(url, timeout=3)
+            return rr.status_code == 200
+        except Exception:
+            return False
+
+    for _ in range(retries):
+        ok = await asyncio.to_thread(_try_once)
+        if ok:
+            return True
+        await asyncio.sleep(delay)
+    return False
+
+async def _run_browser_one(p, name: str, addr: str):
+    try:
+        if addr.startswith("ws://"):
+            browser = await p.chromium.connect(addr)
+        else:
+            ok = await _wait_cdp_http_ready(addr)
+            if not ok:
+                safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
+                return
+
+            browser = await p.chromium.connect_over_cdp(addr)
+
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        await page.goto("https://example.com", wait_until="domcontentloaded")
+        title = await page.title()
+        safe_print(f"✅ [PW] {name} -> {title}")
+
+        # keep profile running: don't close
+
+    except Exception as e:
+        safe_print(f"❌ [PW] {name}: {e}")
+
+async def run_all_playwright(pairs: List[Tuple[str, str]]):
+    async with async_playwright() as p:
+        await asyncio.gather(*(_run_browser_one(p, n, a) for n, a in pairs))
