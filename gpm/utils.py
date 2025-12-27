@@ -1,9 +1,7 @@
 from __future__ import annotations
-import re
-import os, sys
+import re, os, sys
 from typing import List
-from config import print_lock, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
-from logger import setup_logger
+from config import print_lock, setup_logger, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
 
 log = setup_logger()
 
@@ -89,3 +87,14 @@ def menu_multi_select():
 def detect_username_from_cookie_filename(text: str) -> str:
     username = re.search(r'\[([^\]]+)\]\.json$', text)
     return username.group(1) if username else "Unknown"
+
+import shutil
+
+def copy_folder(source: str, destination: str):
+    os.makedirs(destination, exist_ok=True)
+
+    for item in os.listdir(source):
+        item_path = os.path.join(source, item)
+        if os.path.isdir(item_path):
+            dest_path = os.path.join(destination, item)
+            shutil.copytree(item_path, dest_path)

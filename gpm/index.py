@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import started_debug_addrs, started_lock, EXCEL_PATH, COOKIES_DIR, THREADS, START_LIMIT
 import config
 
-from utils import detect_username_from_cookie_filename, safe_print, normalize_proxy, menu_multi_select
+from utils import copy_folder, detect_username_from_cookie_filename, safe_print, normalize_proxy, menu_multi_select
 from excel import update_excel_column_a_with_cookie_files, read_excel
 from services import (
     create_profile,
@@ -44,7 +44,7 @@ def process_row(name, cookie, proxy_raw, index, actions):
             remember_debug_addr(profile_name, addr)
 
         if actions["import"]:
-            pass
+            copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
 
         if actions["close"]:
             close_profile(pid)

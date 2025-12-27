@@ -3,7 +3,7 @@ from typing import List, Tuple
 
 from playwright.async_api import async_playwright
 from utils import safe_print
-from actions import run_tiktok_flow
+from actions.behavior import run_tiktok_flow
 
 async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float = 0.5) -> bool:
     url = http_base.rstrip("/") + "/json/version"
