@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import started_debug_addrs, started_lock, EXCEL_PATH, COOKIES_DIR, THREADS, START_LIMIT
 import config
 
-from utils import safe_print, normalize_proxy, menu_multi_select
+from utils import detect_username_from_cookie_filename, safe_print, normalize_proxy, menu_multi_select
 from excel import update_excel_column_a_with_cookie_files, read_excel
 from services import (
     create_profile,
@@ -17,56 +17,62 @@ from services import (
 from runner import run_all_playwright
 
 def process_row(name, cookie, proxy_raw, index, actions):
+    profile_name = detect_username_from_cookie_filename(name)
     try:
         proxy = normalize_proxy(proxy_raw)
 
+        if actions["handle_cookies"]:
+            from cookie import convert_cookies_format
+            convert_cookies_format()
+            safe_print(f"✅ Converted cookies format in {COOKIES_DIR}")
+
+            try:
+                n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
+                safe_print(f"✅ Updated {n} cookie paths into column A")
+            except Exception as e:
+                safe_print(f"❌ Update cookies->excel failed: {e}")
+
         if actions["create"]:
-            pid = create_profile(name, proxy)
-            safe_print(f"✅ Created {name}")
+            pid = create_profile(profile_name, proxy)
+            safe_print(f"✅ Created {profile_name}")
         else:
-            pid = get_profile_id(name)
+            pid = get_profile_id(profile_name)
 
         if actions["start"]:
             addr = start_profile(pid, index)
-            safe_print(f"✅ Started {name} -> {addr}")
-            remember_debug_addr(name, addr)
+            safe_print(f"✅ Started {profile_name} -> {addr}")
+            remember_debug_addr(profile_name, addr)
 
         if actions["import"]:
             pass
 
         if actions["close"]:
             close_profile(pid)
-            safe_print(f"✅ Closed {name}")
+            safe_print(f"✅ Closed {profile_name}")
 
         if actions["delete"]:
             delete_profile(pid)
-            safe_print(f"🗑️ Deleted {name}")
+            safe_print(f"🗑️ Deleted {profile_name}")
 
     except Exception as e:
-        safe_print(f"❌ {name}: {e}")
-
+        safe_print(f"❌ {profile_name}: {e}")
 
 def main():
     config.start_sem = threading.Semaphore(START_LIMIT)
 
-    try:
-        n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
-        safe_print(f"✅ Updated {n} cookie paths into column A")
-    except Exception as e:
-        safe_print(f"❌ Update cookies->excel failed: {e}")
-
     rows = read_excel()
     sel = menu_multi_select()
-    if sel[6]:
+    if sel[7]:
         return
 
     actions = {
-        "create": sel[0],
-        "start": sel[1],
-        "pw": sel[2],
-        "import": sel[3],
-        "close": sel[4],
-        "delete": sel[5],
+        "handle_cookies": sel[0],
+        "create": sel[1],
+        "start": sel[2],
+        "pw": sel[3],
+        "import": sel[4],
+        "close": sel[5],
+        "delete": sel[6],
     }
 
     with started_lock:

@@ -1,78 +1,91 @@
-import os
-import json
+import os, json
 from concurrent.futures import ThreadPoolExecutor
+from utils import safe_print
+from config import COOKIES_DIR
 
-COOKIE_DIR = "cookies"
+ENCODINGS_TO_TRY = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
+
+def read_lines_with_fallback(path):
+    last_err = None
+    for enc in ENCODINGS_TO_TRY:
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.readlines(), enc
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.readlines(), "utf-8(ignore)"
 
 def convert_file(filename):
-    txt_path = os.path.join(COOKIE_DIR, filename)
+    txt_path = os.path.join(COOKIES_DIR, filename)
     processing_path = txt_path + ".processing"
     json_path = txt_path.replace(".txt", ".json")
 
-    # Nếu đã có json → bỏ qua
     if os.path.exists(json_path):
         return
 
     try:
-        # Đánh dấu đang xử lý (atomic)
         os.rename(txt_path, processing_path)
 
         cookies = []
 
-        with open(processing_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("#") or not line.strip():
-                    continue
+        lines, used_enc = read_lines_with_fallback(processing_path)
 
-                parts = line.strip().split("\t")
-                if len(parts) != 7:
-                    continue
+        for line in lines:
+            if not line.strip() or line.startswith("#") and not line.startswith("#HttpOnly_"):
+                continue
 
-                domain, flag, path, secure, expiry, name, value = parts
+            http_only = False
+            raw = line.strip()
 
-                cookies.append({
-                    "domain": domain,
-                    "path": path,
-                    "secure": secure.upper() == "TRUE",
-                    "httpOnly": False,
-                    "name": name,
-                    "value": value,
-                    "expirationDate": int(expiry)
-                })
+            if raw.startswith("#HttpOnly_"):
+                http_only = True
+                raw = raw[len("#HttpOnly_"):]
+
+            parts = raw.split("\t")
+            if len(parts) != 7:
+                continue
+
+            domain, flag, path, secure, expiry, name, value = parts
+
+            try:
+                exp_int = int(expiry)
+            except ValueError:
+                continue
+
+            cookies.append({
+                "domain": domain,
+                "path": path,
+                "secure": secure.upper() == "TRUE",
+                "httpOnly": http_only,
+                "name": name,
+                "value": value,
+                "expirationDate": exp_int
+            })
 
         if not cookies:
-            raise ValueError("Không có cookie hợp lệ")
+            raise ValueError(f"Không có cookie hợp lệ (encoding dùng: {used_enc})")
 
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(cookies, f, indent=2, ensure_ascii=False)
 
-        # Xóa file đang xử lý sau khi thành công
         os.remove(processing_path)
-        print(f"✅ {filename} → {os.path.basename(json_path)}")
+        safe_print(f"✅ {filename} → {os.path.basename(json_path)} (read: {used_enc})")
 
     except Exception as e:
         print(f"❌ Lỗi {filename}: {e}")
-
-        # rollback nếu lỗi
         if os.path.exists(processing_path):
             os.rename(processing_path, txt_path)
 
-def main():
-    files = [
-        f for f in os.listdir(COOKIE_DIR)
-        if f.endswith(".txt")
-    ]
+def convert_cookies_format():
+    files = [f for f in os.listdir(COOKIES_DIR) if f.endswith(".txt")]
 
     if not files:
         print("⚠️ Không có file cần convert")
         return
 
     workers = min(8, len(files))
-
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        executor.map(convert_file, files)
-
-    print("🎉 Done")
-
-if __name__ == "__main__":
-    main()
+        list(executor.map(convert_file, files))

@@ -49,4 +49,4 @@ async def _run_browser_one(p, name: str, addr: str):
 
 async def run_all_playwright(pairs: List[Tuple[str, str]]):
     async with async_playwright() as p:
-        await asyncio.gather(*(_run_browser_one(p, n, a) for n, a in pairs))
+        await asyncio.gather(*(_run_browser_one(p, n, a) for n, a in pairs), return_exceptions=True)

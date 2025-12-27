@@ -2,7 +2,7 @@ import os
 from openpyxl import load_workbook
 
 from config import EXCEL_PATH
-from utils import list_cookie_filepaths
+from utils import list_filepaths
 
 def update_excel_column_a_with_cookie_files(
     excel_path: str,
@@ -10,7 +10,7 @@ def update_excel_column_a_with_cookie_files(
     sheet_name: str | None = None,
     start_row: int = 2,
 ):
-    cookie_paths = list_cookie_filepaths(cookies_folder)
+    cookie_paths = list_filepaths(cookies_folder)
 
     wb = load_workbook(excel_path)
     ws = wb[sheet_name] if sheet_name else wb.active

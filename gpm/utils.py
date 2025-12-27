@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import os, sys
 from typing import List
 from config import print_lock, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
@@ -37,7 +38,7 @@ def normalize_proxy(raw) -> str:
         return "socks5://" + s
     return s
 
-def list_cookie_filepaths(folder: str) -> List[str]:
+def list_filepaths(folder: str) -> List[str]:
     if not os.path.isdir(folder):
         raise FileNotFoundError(f"Cookies folder not found: {folder}")
 
@@ -53,6 +54,7 @@ def list_cookie_filepaths(folder: str) -> List[str]:
 def menu_multi_select():
     import msvcrt, os
     opts = [
+        "Handle cookies",
         "Create profiles",
         "Start profiles",
         "Attach CDP",
@@ -83,3 +85,7 @@ def menu_multi_select():
                 cur = (cur - 1) % len(opts)
             elif k2 == b"P":
                 cur = (cur + 1) % len(opts)
+
+def detect_username_from_cookie_filename(text: str) -> str:
+    username = re.search(r'\[([^\]]+)\]\.json$', text)
+    return username.group(1) if username else "Unknown"
