@@ -3,6 +3,7 @@ from typing import List, Tuple
 
 from playwright.async_api import async_playwright
 from utils import safe_print
+from actions import run_tiktok_flow
 
 async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float = 0.5) -> bool:
     url = http_base.rstrip("/") + "/json/version"
@@ -34,13 +35,15 @@ async def _run_browser_one(p, name: str, addr: str):
             browser = await p.chromium.connect_over_cdp(addr)
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        context.set_default_timeout(30_000)
+        context.set_default_navigation_timeout(120_000)
+
         page = context.pages[0] if context.pages else await context.new_page()
 
-        await page.goto("https://example.com", wait_until="domcontentloaded")
-        title = await page.title()
-        safe_print(f"✅ [PW] {name} -> {title}")
+        # await page.goto("https://whoer.net", wait_until="domcontentloaded")
 
-        # keep profile running: don't close
+        await run_tiktok_flow(page)
+        safe_print(f"✅ [PW] {name}: done")
 
     except Exception as e:
         safe_print(f"❌ [PW] {name}: {e}")

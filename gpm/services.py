@@ -56,7 +56,6 @@ def start_profile(pid: str, index: int) -> str:
             return addr
         return "http://" + addr
 
-
 def close_profile(pid: str):
     api_get(f"/api/v3/profiles/close/{pid}")
 
