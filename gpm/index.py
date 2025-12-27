@@ -1,9 +1,10 @@
-import sys, threading, os, requests
+import sys, threading, os, requests, time, asyncio
 from typing import Any, Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import load_workbook
+from playwright.async_api import async_playwright
 
 GPM_API = "http://127.0.0.1:19995"
 EXCEL_PATH = "proxies.xlsx"
@@ -20,7 +21,7 @@ REQUEST_TIMEOUT = 30
 SCREEN_W = 1920
 SCREEN_H = 1080
 TASKBAR_H = 40
-GAP = 4
+GAP = 3
 
 START_WIN_SCALE = None
 START_WIN_SIZE = "640,520"
@@ -51,10 +52,12 @@ def get_session():
 
 def api_get(path, params=None):
     r = get_session().get(f"{GPM_API}{path}", params=params or {}, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
     return r.json()
 
 def api_post(path, payload):
     r = get_session().post(f"{GPM_API}{path}", json=payload, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
     return r.json()
 
 # ================= WINDOW =================
@@ -91,6 +94,9 @@ profile_cache = {}
 cache_lock = threading.Lock()
 start_sem = threading.Semaphore(START_LIMIT)
 
+started_debug_addrs: List[Tuple[str, str]] = []
+started_lock = threading.Lock()
+
 def create_profile(name, proxy):
     r = api_post("/api/v3/profiles/create", {
         "profile_name": name,
@@ -122,7 +128,7 @@ def get_profile_id(name):
             return pid
     raise RuntimeError("Profile not found")
 
-def start_profile(pid, index):
+def start_profile(pid, index) -> str:
     with start_sem:
         params = {
             "win_size": START_WIN_SIZE,
@@ -130,7 +136,23 @@ def start_profile(pid, index):
         }
         if START_WIN_SCALE is not None:
             params["win_scale"] = START_WIN_SCALE
-        api_get(f"/api/v3/profiles/start/{pid}", params)
+
+        r = api_get(f"/api/v3/profiles/start/{pid}", params)
+
+        data = r.get("data") or {}
+        addr = data.get("remote_debugging_address")
+
+        if not addr:
+            raise RuntimeError(f"Start profile ok but missing remote_debugging_address (pid={pid})")
+
+        addr = str(addr).strip()
+
+        # normalize:
+        # - if "127.0.0.1:53378" => "http://127.0.0.1:53378"
+        # - if already http(s)/ws => keep
+        if addr.startswith("http://") or addr.startswith("https://") or addr.startswith("ws://"):
+            return addr
+        return "http://" + addr
 
 def close_profile(pid):
     api_get(f"/api/v3/profiles/close/{pid}")
@@ -225,8 +247,10 @@ def process_row(name, cookie, proxy_raw, index, actions):
             pid = get_profile_id(name)
 
         if actions["start"]:
-            start_profile(pid, index)
-            safe_print(f"✅ Started {name}")
+            addr = start_profile(pid, index)
+            safe_print(f"✅ Started {name} -> {addr}")
+            with started_lock:
+                started_debug_addrs.append((name, addr))
 
         if actions["import"]:
             pass
@@ -251,6 +275,7 @@ def menu_multi_select():
         "Import cookies",
         "Close profiles",
         "Delete profiles",
+        "Attach remote CDP",
         "Exit"
     ]
     sel = [False] * len(opts)
@@ -276,6 +301,53 @@ def menu_multi_select():
             elif k2 == b"P":
                 cur = (cur + 1) % len(opts)
 
+# ================= PLAYWRIGHT =================
+async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float = 0.5) -> bool:
+    url = http_base.rstrip("/") + "/json/version"
+
+    def _try_once() -> bool:
+        try:
+            rr = requests.get(url, timeout=3)
+            return rr.status_code == 200
+        except Exception:
+            return False
+
+    for _ in range(retries):
+        ok = await asyncio.to_thread(_try_once)
+        if ok:
+            return True
+        await asyncio.sleep(delay)
+    return False
+
+async def _run_browser_one(p, name: str, addr: str):
+    try:
+        if addr.startswith("ws://"):
+            browser = await p.chromium.connect(addr)
+        else:
+            ok = await _wait_cdp_http_ready(addr)
+            if not ok:
+                safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
+                return
+
+            browser = await p.chromium.connect_over_cdp(addr)
+
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        await page.goto("https://example.com", wait_until="domcontentloaded")
+        title = await page.title()
+        safe_print(f"✅ [PW] {name} -> {title}")
+
+        # await browser.close()
+
+    except Exception as e:
+        safe_print(f"❌ [PW] {name}: {e}")
+
+async def run_all_playwright(pairs: List[Tuple[str, str]]):
+    async with async_playwright() as p:
+        await asyncio.gather(*(_run_browser_one(p, n, a) for n, a in pairs))
+
+# ================= MAIN =================
 def main():
     try:
         n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
@@ -285,7 +357,7 @@ def main():
 
     rows = read_excel()
     sel = menu_multi_select()
-    if sel[5]:
+    if sel[6]:
         return
 
     actions = {
@@ -293,8 +365,12 @@ def main():
         "start": sel[1],
         "import": sel[2],
         "close": sel[3],
-        "delete": sel[4]
+        "delete": sel[4],
+        "pw": sel[5],
     }
+
+    with started_lock:
+        started_debug_addrs.clear()
 
     with ThreadPoolExecutor(max_workers=THREADS) as ex:
         futures = [
@@ -303,6 +379,15 @@ def main():
         ]
         for _ in as_completed(futures):
             pass
+
+    if actions["pw"]:
+        with started_lock:
+            pairs = started_debug_addrs.copy()
+
+        if not pairs:
+            safe_print("⚠️ No remote_debugging_address collected. Select 'Start profiles' (or start them earlier) before Playwright.")
+        else:
+            asyncio.run(run_all_playwright(pairs))
 
     safe_print("✅ ALL DONE")
 
