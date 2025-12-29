@@ -1,8 +1,8 @@
-*.json
-*.txt
-*.xlsx
-*.xpi
-profiles
-storage_state
 logs
 __pycache__
+
+data
+*.txt
+profiles
+storage_state
+references.md

@@ -1,5 +1,6 @@
 import threading, asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from playwright.async_api import async_playwright
 
 from config import started_debug_addrs, started_lock, EXCEL_PATH, COOKIES_DIR, THREADS, START_LIMIT
 import config
@@ -15,9 +16,11 @@ from services import (
     remember_debug_addr,
 )
 from runner import run_all_playwright
+from actions.cookie import import_cookie
 
 def process_row(name, cookie, proxy_raw, index, actions):
     profile_name = detect_username_from_cookie_filename(name)
+    addr = None
     try:
         proxy = normalize_proxy(proxy_raw)
 
@@ -45,6 +48,28 @@ def process_row(name, cookie, proxy_raw, index, actions):
 
         if actions["import"]:
             copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
+
+            if not addr:
+                addr = start_profile(pid, index)
+                safe_print(f"✅ Started {profile_name} -> {addr}")
+                remember_debug_addr(profile_name, addr)
+
+            if addr:
+                async def _import_async():
+                    async with async_playwright() as p:
+                        browser = await p.chromium.connect_over_cdp(addr)
+                        context = browser.contexts[0]
+                        page = await context.new_page()
+                        await import_cookie(page, profile_name, cookie)
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(_import_async())
+                finally:
+                    loop.close()
+            else:
+                safe_print(f"⚠️ Cannot import: Profile {profile_name} not started")
 
         if actions["close"]:
             close_profile(pid)

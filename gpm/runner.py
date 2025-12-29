@@ -2,6 +2,7 @@ import asyncio, requests
 from typing import List, Tuple
 
 from playwright.async_api import async_playwright
+from actions.cookie import import_cookie
 from utils import safe_print
 from actions.behavior import run_tiktok_flow
 
@@ -26,8 +27,11 @@ async def _run_browser_one(p, name: str, addr: str):
     try:
         if addr.startswith("ws://"):
             browser = await p.chromium.connect(addr)
+            print(f"✅ [{name}] Connected to CDP WS: {addr}")
         else:
             ok = await _wait_cdp_http_ready(addr)
+            if ok:
+                print(f"✅ [{name}] CDP HTTP ready: {addr}")
             if not ok:
                 safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
                 return
@@ -42,7 +46,9 @@ async def _run_browser_one(p, name: str, addr: str):
 
         # await page.goto("https://whoer.net", wait_until="domcontentloaded")
 
-        await run_tiktok_flow(page)
+        # await import_cookie(page, '[{"name":"test_cookie","value":"test_value","domain":".example.com"}]')
+
+        # await run_tiktok_flow(page)
 
     except Exception as e:
         safe_print(f"❌ [PW] {name}: {e}")

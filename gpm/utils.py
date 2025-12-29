@@ -1,5 +1,5 @@
 from __future__ import annotations
-import re, os, sys
+import re, os, sys, shutil
 from typing import List
 from config import print_lock, setup_logger, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
 
@@ -36,7 +36,7 @@ def normalize_proxy(raw) -> str:
         return "socks5://" + s
     return s
 
-def list_filepaths(folder: str) -> List[str]:
+def list_filepaths(folder: str, base: str = ".") -> List[str]:
     if not os.path.isdir(folder):
         raise FileNotFoundError(f"Cookies folder not found: {folder}")
 
@@ -44,7 +44,7 @@ def list_filepaths(folder: str) -> List[str]:
     for name in os.listdir(folder):
         full = os.path.join(folder, name)
         if os.path.isfile(full):
-            files.append(os.path.abspath(full))
+            files.append(os.path.relpath(full, start=base))
 
     files.sort(key=lambda p: os.path.basename(p).lower())
     return files
@@ -88,13 +88,19 @@ def detect_username_from_cookie_filename(text: str) -> str:
     username = re.search(r'\[([^\]]+)\]\.json$', text)
     return username.group(1) if username else "Unknown"
 
-import shutil
-
 def copy_folder(source: str, destination: str):
-    os.makedirs(destination, exist_ok=True)
+    try:
+        if os.path.exists(destination) and os.listdir(destination):
+            return
+        os.makedirs(destination, exist_ok=True)
 
-    for item in os.listdir(source):
-        item_path = os.path.join(source, item)
-        if os.path.isdir(item_path):
-            dest_path = os.path.join(destination, item)
-            shutil.copytree(item_path, dest_path)
+        for item in os.listdir(source):
+            src_path = os.path.join(source, item)
+            dst_path = os.path.join(destination, item)
+
+            if os.path.isdir(src_path):
+                copy_folder(src_path, dst_path)
+            else:
+                shutil.copy2(src_path, dst_path)
+    except Exception as e:
+        safe_print(f"⚠️ Skipped copying {source} to {destination} (file in use or error): {e}")
