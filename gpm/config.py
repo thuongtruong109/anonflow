@@ -8,6 +8,9 @@ cache_lock = threading.Lock()
 started_debug_addrs = []  # list[tuple[str, str]]
 started_lock = threading.Lock()
 
+pw_jobs = []  # list[tuple[str, str, str]] - (profile_name, addr, cookie)
+pw_jobs_lock = threading.Lock()
+
 start_sem = None
 
 GPM_API = "http://127.0.0.1:19995"

@@ -4,6 +4,24 @@ from client import api_get, api_post
 from utils import compute_win_pos
 
 def create_profile(name: str, proxy: str) -> str:
+    with cache_lock:
+        if name in profile_cache:
+            return profile_cache[name]
+
+    r = api_get("/api/v3/profiles", {
+        "search": name,
+        "page": 1,
+        "per_page": 50,
+        "sort": 2
+    })
+
+    for it in r.get("data", []):
+        if it.get("name") == name:
+            pid = it["id"]
+            with cache_lock:
+                profile_cache[name] = pid
+            return pid
+
     r = api_post("/api/v3/profiles/create", {
         "profile_name": name,
         "group_name": GROUP_NAME,
@@ -13,7 +31,12 @@ def create_profile(name: str, proxy: str) -> str:
         "raw_proxy": proxy,
         "startup_urls": ""
     })
-    return r["data"]["id"]
+
+    pid = r["data"]["id"]
+    with cache_lock:
+        profile_cache[name] = pid
+
+    return pid
 
 def get_profile_id(name: str) -> str:
     with cache_lock:

@@ -1,6 +1,5 @@
 import threading, asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from playwright.async_api import async_playwright
 
 from config import started_debug_addrs, started_lock, EXCEL_PATH, COOKIES_DIR, THREADS, START_LIMIT
 import config
@@ -16,7 +15,6 @@ from services import (
     remember_debug_addr,
 )
 from runner import run_all_playwright
-from actions.cookie import import_cookie
 
 def process_row(name, cookie, proxy_raw, index, actions):
     profile_name = detect_username_from_cookie_filename(name)
@@ -41,35 +39,15 @@ def process_row(name, cookie, proxy_raw, index, actions):
         else:
             pid = get_profile_id(profile_name)
 
-        if actions["start"]:
+        if actions["start"] or actions["import"] or actions["pw"]:
             addr = start_profile(pid, index)
             safe_print(f"✅ Started {profile_name} -> {addr}")
             remember_debug_addr(profile_name, addr)
 
-        if actions["import"]:
-            copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
-
-            if not addr:
-                addr = start_profile(pid, index)
-                safe_print(f"✅ Started {profile_name} -> {addr}")
-                remember_debug_addr(profile_name, addr)
-
+        if actions["import"] or actions["pw"]:
             if addr:
-                async def _import_async():
-                    async with async_playwright() as p:
-                        browser = await p.chromium.connect_over_cdp(addr)
-                        context = browser.contexts[0]
-                        page = await context.new_page()
-                        await import_cookie(page, profile_name, cookie)
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(_import_async())
-                finally:
-                    loop.close()
-            else:
-                safe_print(f"⚠️ Cannot import: Profile {profile_name} not started")
+                with config.pw_jobs_lock:
+                    config.pw_jobs.append((profile_name, addr, cookie))
 
         if actions["close"]:
             close_profile(pid)
@@ -103,6 +81,9 @@ def main():
     with started_lock:
         started_debug_addrs.clear()
 
+    with config.pw_jobs_lock:
+        config.pw_jobs.clear()
+
     with ThreadPoolExecutor(max_workers=THREADS) as ex:
         futures = [
             ex.submit(process_row, *row, i, actions)
@@ -111,14 +92,14 @@ def main():
         for _ in as_completed(futures):
             pass
 
-    if actions["pw"]:
-        with started_lock:
-            pairs = started_debug_addrs.copy()
+    if actions["import"] or actions["pw"]:
+        with config.pw_jobs_lock:
+            jobs = config.pw_jobs.copy()
 
-        if not pairs:
-            safe_print("⚠️ No remote_debugging_address collected. Select 'Start profiles' before Playwright.")
+        if not jobs:
+            safe_print("⚠️ No jobs collected.")
         else:
-            asyncio.run(run_all_playwright(pairs))
+            asyncio.run(run_all_playwright(jobs, actions))
 
     safe_print("✅ ALL DONE")
 
