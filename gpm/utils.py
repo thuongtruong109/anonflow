@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re, os, sys, shutil
 from typing import List
-from config import print_lock, setup_logger, START_WIN_SIZE, SCREEN_W, SCREEN_H, TASKBAR_H, GAP
+from config import print_lock, setup_logger, START_WIN_SIZE, ROWS, COLS, SCREEN_H, TASKBAR_H, GAP
 
 log = setup_logger()
 
@@ -11,11 +11,19 @@ def safe_print(*args):
 
 def compute_win_pos(index: int) -> str:
     w, h = map(int, START_WIN_SIZE.split(","))
+    cols, rows = COLS, ROWS
+
+    capacity = cols * rows
+    i = index % capacity
+
+    x = (i % cols) * (w + GAP)
+    y = (i // cols) * (h + GAP)
+
     usable_h = SCREEN_H - TASKBAR_H
-    cols = max(1, SCREEN_W // (w + GAP))
-    x = (index % cols) * (w + GAP)
-    y = (index // cols) * (h + GAP)
-    return f"{x},{min(y, usable_h - h)}"
+    if y > usable_h - h:
+        y = usable_h - h
+
+    return f"{x},{y}"
 
 def normalize_proxy(raw) -> str:
     if not raw:

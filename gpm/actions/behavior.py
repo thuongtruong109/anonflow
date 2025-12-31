@@ -12,34 +12,25 @@ from actions.common import (
     human_scroll_wheel,
     jitter_mouse,
     watch_like_human,
+    start_popup_watcher,
+    stop_popup_watcher,
 )
 
-# -----------------------------
-# Small UI helpers
-# -----------------------------
 async def close_cta_modal_if_any(page: Page) -> bool:
     return await safe_click(page, 'button[data-e2e="alt-middle-cta-cancel-btn"]', timeout_ms=3000)
-
 
 async def close_exit_if_any(page: Page) -> bool:
     return await safe_click(page, "[aria-label='exit']", timeout_ms=2000)
 
-
 async def close_profile_share_modal_if_any(page: Page) -> bool:
     return await safe_click(page, "[aria-label='close']", timeout_ms=2000)
-
 
 async def click_author_avatar_if_any(page: Page) -> bool:
     return await safe_click(page, 'a[data-e2e="video-author-avatar"]', timeout_ms=3500)
 
-
 def is_bridge_link(url: str) -> bool:
     return re.search(r"(onelink\.me|snssdk)", url, re.IGNORECASE) is not None
 
-
-# -----------------------------
-# Profile interactions
-# -----------------------------
 async def random_interact_in_profile(page: Page):
     """
     Human-ish profile browsing:
@@ -106,10 +97,6 @@ async def random_interact_in_profile(page: Page):
         except Exception:
             pass
 
-
-# -----------------------------
-# Main TikTok flow
-# -----------------------------
 async def run_tiktok_flow(
     page: Page,
     *,
@@ -130,68 +117,75 @@ async def run_tiktok_flow(
     page.set_default_timeout(action_timeout_ms)
 
     await page.goto(url, wait_until="domcontentloaded")
-    await close_cta_modal_if_any(page)
 
-    will_view_amount = randi(will_view_min, will_view_max)
+    # ✅ start watcher (background)
+    watcher = start_popup_watcher(page)
 
-    for _ in range(will_view_amount):
-        # 1) watch current video naturally
-        await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
+    try:
+        await close_cta_modal_if_any(page)
 
-        # 2) small scroll nudges (not big jumps)
-        if chance(0.55):
-            await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
-        if chance(0.10):
-            await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
+        will_view_amount = randi(will_view_min, will_view_max)
 
-        # 3) sometimes open comments briefly
-        if chance(0.22):
+        for _ in range(will_view_amount):
+            # 1) watch current video naturally
+            await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
+
+            # 2) small scroll nudges (not big jumps)
+            if chance(0.55):
+                await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
+            if chance(0.10):
+                await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
+
+            # 3) sometimes open comments briefly
+            if chance(0.22):
+                await sleep_ms(900, 2400)
+                await safe_click_xpath(page, "//*[@data-e2e='comment-icon']", timeout_ms=6000)
+
+                # "read" comments
+                await sleep_ms(1800, 6000)
+
+                # small comment scroll
+                if chance(0.35):
+                    await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
+
+                # detect possible bridge navigation
+                has_bridge = False
+                last = page.url
+                end_time = asyncio.get_event_loop().time() + 3.0
+                while asyncio.get_event_loop().time() < end_time:
+                    cur = page.url
+                    if cur != last:
+                        last = cur
+                        has_bridge = is_bridge_link(cur)
+                    await asyncio.sleep(0.3)
+
+                if not has_bridge:
+                    await close_exit_if_any(page)
+
+            # 4) sometimes visit author profile and interact
+            if chance(0.18):
+                await sleep_ms(900, 2600)
+                ok = await click_author_avatar_if_any(page)
+                if ok:
+                    await close_profile_share_modal_if_any(page)
+                    await sleep_ms(800, 2200)
+                    await random_interact_in_profile(page)
+                    await sleep_ms(700, 2000)
+
+            # 5) go next video: ONE space, with a tiny pause after
+            await page.keyboard.press("Space")
             await sleep_ms(900, 2400)
-            await safe_click_xpath(page, "//*[@data-e2e='comment-icon']", timeout_ms=6000)
 
-            # "read" comments
-            await sleep_ms(1800, 6000)
-
-            # small comment scroll
-            if chance(0.35):
-                await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
-
-            # detect possible bridge navigation
-            has_bridge = False
-            last = page.url
-            end_time = asyncio.get_event_loop().time() + 3.0
-            while asyncio.get_event_loop().time() < end_time:
-                cur = page.url
-                if cur != last:
-                    last = cur
-                    has_bridge = is_bridge_link(cur)
-                await asyncio.sleep(0.3)
-
-            if not has_bridge:
-                await close_exit_if_any(page)
-
-        # 4) sometimes visit author profile and interact
-        if chance(0.18):
-            await sleep_ms(900, 2600)
-            ok = await click_author_avatar_if_any(page)
-            if ok:
-                await close_profile_share_modal_if_any(page)
-                await sleep_ms(800, 2200)
-                await random_interact_in_profile(page)
-                await sleep_ms(700, 2000)
-
-        # 5) go next video: ONE space, with a tiny pause after
-        await page.keyboard.press("Space")
-        await sleep_ms(900, 2400)
-
-        # optional: rare "fast swipe streak" (still human-ish) using press_space_n
-        if chance(0.06):
-            await press_space_n(
-                page,
-                randi(1, 2),
-                delay_min_ms=400,
-                delay_max_ms=1300,
-                watch_min_ms=2200,
-                watch_max_ms=6500,
-                humanize=True,
-            )
+            # optional: rare "fast swipe streak" (still human-ish) using press_space_n
+            if chance(0.06):
+                await press_space_n(
+                    page,
+                    randi(1, 2),
+                    delay_min_ms=400,
+                    delay_max_ms=1300,
+                    watch_min_ms=2200,
+                    watch_max_ms=6500,
+                    humanize=True,
+                )
+    finally:
+        await stop_popup_watcher(watcher)

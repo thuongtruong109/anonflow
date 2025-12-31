@@ -51,8 +51,6 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
 
         if actions.get("import"):
             try:
-                copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
-
                 async with async_playwright() as p:
                     browser = await p.chromium.connect_over_cdp(addr)
                     context = browser.contexts[0]
@@ -62,7 +60,7 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             except Exception as e:
                 safe_print(f"❌ Import failed for {name}: {e}")
 
-        if actions.get("pw"):
+        if actions.get("start"):
             await run_tiktok_flow(page)
 
     except Exception as e:

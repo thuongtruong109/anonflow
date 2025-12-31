@@ -26,6 +26,8 @@ def process_row(name, cookie, proxy_raw, index, actions):
             from cookie import convert_cookies_format
             convert_cookies_format()
             safe_print(f"✅ Converted cookies format in {COOKIES_DIR}")
+            copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
+            safe_print("✅ Installed extensions to profiles")
 
             try:
                 n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
