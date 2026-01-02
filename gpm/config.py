@@ -29,13 +29,13 @@ BROWSER_NAME = "Chrome"
 
 SCREEN_W = 1920
 SCREEN_H = 1080
-TASKBAR_H = 35
+TASKBAR_H = 30
 GAP = 1
 ROWS = 3
 COLS = 4
 
 START_WIN_SCALE = None
-START_WIN_SIZE = "470,345"
+START_WIN_SIZE = "470,347"
 
 def setup_logger():
     logger = logging.getLogger("my_app")
@@ -60,6 +60,16 @@ def setup_logger():
 
     # file_handler = logging.FileHandler("app.log", encoding="utf-8")
     # file_handler.setLevel(logging.DEBUG)
+    # file_handler.setFormatter(formatter)
+    # logger.addHandler(file_handler)
+
+    # file_handler = logging.FileHandler("like.log", encoding="utf-8")
+    # file_handler.setLevel(logging.INFO)
+    # file_handler.setFormatter(formatter)
+    # logger.addHandler(file_handler)
+
+    # file_handler = logging.FileHandler("comment.log", encoding="utf-8")
+    # file_handler.setLevel(logging.INFO)
     # file_handler.setFormatter(formatter)
     # logger.addHandler(file_handler)
 

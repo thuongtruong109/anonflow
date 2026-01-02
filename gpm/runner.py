@@ -26,6 +26,28 @@ async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float =
         await asyncio.sleep(delay)
     return False
 
+# async def _force_english(context, page):
+#     """
+#     Best-effort force English for most websites:
+#     - navigator.language + languages
+#     - (optionally) set cookie 'lang=en' for tiktok domains (safe no-op if not used)
+#     """
+#     # 1) Override navigator.language for JS checks
+#     await context.add_init_script("""
+#     Object.defineProperty(navigator, 'language', {get: () => 'en-US'});
+#     Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+#     """)
+
+#     # 2) TikTok commonly respects /?lang=en OR a cookie-based preference
+#     #    We'll set a cookie on likely domains. If domain mismatch, it simply won't apply.
+#     try:
+#         await context.add_cookies([
+#             {"name": "lang", "value": "en", "domain": ".tiktok.com", "path": "/"},
+#             {"name": "language", "value": "en", "domain": ".tiktok.com", "path": "/"},
+#         ])
+#     except Exception:
+#         pass
+
 async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[str, Any]):
     try:
         if not addr:
@@ -43,11 +65,16 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             browser = await p.chromium.connect_over_cdp(addr)
             safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
 
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        context = browser.contexts[0] if browser.contexts else await browser.new_context(
+            locale="en-US",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
         context.set_default_timeout(30_000)
         context.set_default_navigation_timeout(120_000)
 
         page = context.pages[0] if context.pages else await context.new_page()
+
+        # await _force_english(context, page)
 
         if actions.get("import"):
             try:
