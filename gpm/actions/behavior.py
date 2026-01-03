@@ -20,6 +20,9 @@ from actions.common import (
 )
 from comment import TextRandomizer
 
+# Global để lưu URL video hiện tại
+_current_video_url = None
+
 # Helper functions cho logging
 def _log_action(log_file: str, username: str, video_url: str, action_details: str = ""):
     """Ghi log action vào file"""
@@ -41,45 +44,230 @@ def _log_action(log_file: str, username: str, video_url: str, action_details: st
     except Exception as e:
         print(f"Error logging to {log_file}: {e}")
 
-def _with_lang_param(url: str, lang: str = "en") -> str:
-    try:
-        p = urlparse(url)
-        q = parse_qs(p.query)
-        q["lang"] = [lang]
-        new_query = urlencode(q, doseq=True)
-        return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
-    except Exception:
-        return url
 
-async def check_login_status(page: Page, username: str = "unknown") -> bool:
+async def inject_video_detector(page: Page) -> bool:
     """
-    Kiểm tra xem user đã login chưa bằng cách tìm activity button.
+    Inject JavaScript code để detect video đang xem hiện tại.
+    Script này sẽ tự động track video URL và expose qua console.
 
     Returns:
-        True nếu đã login (tìm thấy activity button)
-        False nếu chưa login (không tìm thấy activity button)
+        True nếu inject thành công, False nếu không
     """
     try:
-        # Selector cho activity button
-        activity_button_selector = 'button[data-e2e="nav-activity"][aria-label="Activity"]'
+        # Đọc nội dung file detect-video.js
+        script_path = Path(__file__).parent / "detect-video.js"
 
-        try:
-            activity_btn = page.locator(activity_button_selector).first
-            if await activity_btn.count() > 0 and await activity_btn.is_visible():
-                # Tìm thấy activity button -> đã đăng nhập
-                if username and username != "unknown":
-                    _log_action("login.log", username, page.url, "Login status: true")
-                return True
-        except Exception:
-            pass
+        if not script_path.exists():
+            print(f"Warning: {script_path} not found")
+            return False
 
-        # Không tìm thấy activity button -> chưa đăng nhập
-        if username and username != "unknown":
-            _log_action("login.log", username, page.url, "Login status: false")
+        with open(script_path, "r", encoding="utf-8") as f:
+            js_code = f.read()
+
+        # Inject script vào page
+        await page.evaluate(js_code)
+        await sleep_ms(500, 800)
+        return True
+
+    except Exception as e:
+        print(f"Error injecting video detector: {e}")
         return False
 
-    except Exception:
-        # Nếu có lỗi, giả định là chưa login để skip like/comment nhưng vẫn thực hiện các hành vi khác
+
+async def get_current_video_url(page: Page) -> str | None:
+    """
+    Lấy URL của video đang xem hiện tại từ JavaScript detector.
+
+    Returns:
+        URL của video hoặc None nếu không detect được
+    """
+    try:
+        # Gọi hàm JavaScript để lấy current video URL
+        js_code = r"""
+        (() => {
+          const BASE = "https://www.tiktok.com";
+
+          const extractLongNumber = (s) => {
+            const nums = (s || "").match(/\d{10,}/g);
+            if (!nums) return null;
+            return nums.sort((a, b) => b.length - a.length)[0];
+          };
+
+          const getActivePlayer = () => {
+            const players = [...document.querySelectorAll(".tiktok-web-player")];
+            if (!players.length) return null;
+
+            for (const p of players) {
+              const v = p.querySelector("video");
+              if (v && !v.paused && !v.ended && v.currentTime > 0) return p;
+            }
+
+            const vpH = window.innerHeight;
+            const visibleRatio = (el) => {
+              const r = el.getBoundingClientRect();
+              const visible = Math.max(0, Math.min(r.bottom, vpH) - Math.max(r.top, 0));
+              return visible / Math.max(1, r.height);
+            };
+
+            return players.sort((a, b) => visibleRatio(b) - visibleRatio(a))[0];
+          };
+
+          const findUsernameNear = (root) => {
+            let node = root;
+            for (let i = 0; i < 12 && node; i++) {
+              const links = [...(node.querySelectorAll?.('a[href^="/@"]') || [])];
+              for (const a of links) {
+                const href = a.getAttribute("href") || "";
+                const m = href.match(/^\/@([^/?#]+)/);
+                if (m?.[1]) return m[1];
+              }
+              node = node.parentElement;
+            }
+            return null;
+          };
+
+          const player = getActivePlayer();
+          if (!player) return null;
+
+          const videoId = extractLongNumber(player.id);
+          if (!videoId) return null;
+
+          const username = findUsernameNear(player);
+          return username
+            ? `${BASE}/@${username}/video/${videoId}`
+            : `${BASE}/video/${videoId}`;
+        })();
+        """
+
+        video_url = await page.evaluate(js_code)
+        return video_url if video_url else None
+
+    except Exception as e:
+        return None
+
+
+async def track_and_log_video(page: Page, username: str = "unknown") -> None:
+    """
+    Track video đang xem và log vào like.log khi video thay đổi.
+
+    Args:
+        page: Playwright Page object
+        username: Tên người dùng (để log)
+    """
+    global _current_video_url
+
+    try:
+        video_url = await get_current_video_url(page)
+
+        if video_url and video_url != _current_video_url:
+            _current_video_url = video_url
+
+            # Log vào like.log với action "Now watching"
+            if username and username != "unknown":
+                _log_action("like.log", username, video_url, "Now watching")
+
+    except Exception as e:
+        pass
+
+
+async def check_login_status(page: Page, username: str = "unknown") -> bool:
+    try:
+        # Wait a bit for the page to load elements (TikTok can be slow)
+        await sleep_ms(2000, 4000)
+
+        logged_in_selector = '[data-e2e="edit-profile-entrance"]'
+        not_logged_in_selector = '[data-e2e="follow-button"]'
+
+        # Additional potential selectors (based on common TikTok patterns; verify via browser inspect)
+        alt_logged_in_selectors = [
+            '[data-e2e="profile-edit-button"]',  # Alternative edit button
+            'a[href*="/setting"]',  # Settings link often present when logged in
+        ]
+        alt_not_logged_in_selectors = [
+            '[data-e2e="nav-profile"]',  # Profile nav might differ
+        ]
+
+        # Check primary logged-in selector
+        logged_in_el = page.locator(logged_in_selector).first
+        if await logged_in_el.count() > 0 and await logged_in_el.is_visible():
+            if username and username != "unknown":
+                _log_action(
+                    "login.log",
+                    username,
+                    page.url,
+                    "Login status: true (edit-profile-entrance found)"
+                )
+            return True
+
+        # Check alternative logged-in selectors
+        for selector in alt_logged_in_selectors:
+            el = page.locator(selector).first
+            if await el.count() > 0 and await el.is_visible():
+                if username and username != "unknown":
+                    _log_action(
+                        "login.log",
+                        username,
+                        page.url,
+                        f"Login status: true (alternative selector: {selector})"
+                    )
+                return True
+
+        # Check not-logged-in selectors
+        not_logged_in_el = page.locator(not_logged_in_selector).first
+        if await not_logged_in_el.count() > 0 and await not_logged_in_el.is_visible():
+            if username and username != "unknown":
+                _log_action(
+                    "login.log",
+                    username,
+                    page.url,
+                    "Login status: false (follow-button found)"
+                )
+            return False
+
+        # Check alternative not-logged-in selectors
+        for selector in alt_not_logged_in_selectors:
+            el = page.locator(selector).first
+            if await el.count() > 0 and await el.is_visible():
+                if username and username != "unknown":
+                    _log_action(
+                        "login.log",
+                        username,
+                        page.url,
+                        f"Login status: false (alternative selector: {selector})"
+                    )
+                return False
+
+        # Fallback: If on own profile and no follow button, assume logged in (but log for review)
+        # This is a heuristic—test carefully to avoid false positives
+        if username and username != "unknown" and f"/@{username}" in page.url:
+            follow_check = page.locator('[data-e2e="follow-button"]')
+            if await follow_check.count() == 0:
+                _log_action(
+                    "login.log",
+                    username,
+                    page.url,
+                    "Login status: true (fallback: no follow button on own profile)"
+                )
+                return True
+
+        # No match found
+        if username and username != "unknown":
+            _log_action(
+                "login.log",
+                username,
+                page.url,
+                "Login status: false (no matching element)"
+            )
+        return False
+
+    except Exception as e:
+        if username and username != "unknown":
+            _log_action(
+                "login.log",
+                username,
+                page.url,
+                f"Login status: false (exception: {str(e)})"
+            )
         return False
 
 async def close_cta_modal_if_any(page: Page) -> bool:
@@ -293,6 +481,35 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
         username: Tên profile/user thực hiện actions (để log)
         is_logged_in: Login status (để quyết định có thực hiện like/comment không)
     """
+    # Kiểm tra xem profile có video không trước khi scroll
+    no_content_texts = [
+        "Upload your first video",
+        "Your videos will appear here",
+        "No content",
+        "This user has not published any videos."
+    ]
+
+    has_no_content = False
+    for text in no_content_texts:
+        try:
+            element = page.locator(f'p:text-is("{text}")').first
+            if await element.count() > 0 and await element.is_visible():
+                has_no_content = True
+                break
+        except Exception:
+            continue
+
+    # Nếu không có video trong profile, quay về /foryou ngay lập tức
+    if has_no_content:
+        try:
+            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            await sleep_ms(2000, 4000)
+            await close_cta_modal_if_any(page)
+        except Exception:
+            pass
+        return
+
     scroll_rounds = randi(3, 7)
     for _ in range(scroll_rounds):
         await human_scroll_wheel(
@@ -316,7 +533,15 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
     if len(links) > 3:
         links = links[2:]
 
+    # Nếu không tìm thấy video nào trong profile sau khi scroll, quay về /foryou để lướt
     if not links:
+        try:
+            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            await sleep_ms(2000, 4000)
+            await close_cta_modal_if_any(page)
+        except Exception:
+            pass
         return
 
     video = random.choice(links)
@@ -336,6 +561,16 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
         await video.click()
     except Exception:
         return
+
+    # Đợi page load sau khi click vào video
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+        await sleep_ms(1000, 2000)
+    except Exception:
+        pass
+
+    # Track và log video đang xem trong profile
+    await track_and_log_video(page, username=username)
 
     await watch_like_human(page, min_ms=7000, max_ms=22000, mouse_jitter=True)
     await sleep_ms(1200, 5200)
@@ -365,12 +600,11 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
 async def run_tiktok_flow(
     page: Page,
     *,
-    url: str = "https://www.tiktok.com/foryou",
     nav_timeout_ms: int = 60_000,
     action_timeout_ms: int = 15_000,
     will_view_min: int = 5,
     will_view_max: int = 15,
-    username: str = "unknown",
+    username: str = "foryou",
 ):
     """
     More natural feed browsing:
@@ -378,6 +612,7 @@ async def run_tiktok_flow(
     - small scroll adjustments
     - occasional comments open/close
     - occasional profile visit
+    - track video URL và log vào like.log
 
     Args:
         username: Tên profile/user thực hiện actions (để log)
@@ -385,11 +620,9 @@ async def run_tiktok_flow(
     page.set_default_navigation_timeout(nav_timeout_ms)
     page.set_default_timeout(action_timeout_ms)
 
-    # Thêm param ?lang=en vào URL trước khi navigate
-    # url_with_lang = _with_lang_param(url, lang="en")
-    # await page.goto(url_with_lang, wait_until="domcontentloaded")
-
-    await page.goto(url, wait_until="domcontentloaded")
+    # 1. Vào profile page để check login status
+    await page.goto(f"https://www.tiktok.com/@{username}?lang=en", wait_until="load")
+    await page.wait_for_load_state("networkidle", timeout=10000)
 
     # ✅ start watcher (background)
     watcher = start_popup_watcher(page)
@@ -397,12 +630,32 @@ async def run_tiktok_flow(
     try:
         await close_cta_modal_if_any(page)
 
-        # Kiểm tra login status trước khi thực hiện actions
+        # 2. Kiểm tra login status
         is_logged_in = await check_login_status(page, username=username)
+
+        # 3. Nếu chưa login, dừng ngay, không làm gì cả
+        if not is_logged_in:
+            _log_action("login.log", username, page.url, "Not logged in - stopping all actions")
+            return
+
+        # 4. Nếu đã login, chuyển về /foryou để thực hiện behaviors
+        try:
+            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            await sleep_ms(2000, 4000)
+            await close_cta_modal_if_any(page)
+        except Exception:
+            pass
+
+        # 4.5. Inject video detector script
+        await inject_video_detector(page)
 
         will_view_amount = randi(will_view_min, will_view_max)
 
         for _ in range(will_view_amount):
+            # 0) Track và log video đang xem
+            await track_and_log_video(page, username=username)
+
             # 1) watch current video naturally
             await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
 
@@ -457,6 +710,13 @@ async def run_tiktok_flow(
                 await sleep_ms(900, 2600)
                 ok = await click_author_avatar_if_any(page)
                 if ok:
+                    # Đợi page load sau khi click vào avatar
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                        await sleep_ms(1000, 2000)
+                    except Exception:
+                        pass
+
                     await close_profile_share_modal_if_any(page)
                     await sleep_ms(800, 2200)
                     await random_interact_in_profile(page, username=username, is_logged_in=is_logged_in)
@@ -479,3 +739,4 @@ async def run_tiktok_flow(
                 )
     finally:
         await stop_popup_watcher(watcher)
+

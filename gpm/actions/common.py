@@ -190,12 +190,9 @@ def build_common_popup_locators(page: Page):
         page.locator("[aria-label='exit']"),
         page.locator("[aria-label='close']"),
 
-        # Random 'Not now' button (your snippet)
         page.get_by_role("button", name=re.compile(r"^Not now$", re.I)),
         page.locator("button:has-text('Not now')"),
         page.locator("button.TUXButton:has-text('Not now')"),
-        page.locator("[role='dialog'] button.TUXButton.TUXButton--secondary:has(.TUXButton-label)"),
-        page.locator("button.TUXButton.TUXButton--secondary:has(.TUXButton-label)"),
 
         page.get_by_role(
             "button",

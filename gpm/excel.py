@@ -15,6 +15,9 @@ def update_excel_column_a_with_cookie_files(
     wb = load_workbook(excel_path)
     ws = wb[sheet_name] if sheet_name else wb.active
 
+    for row in range(start_row, ws.max_row + 1):
+        ws.cell(row=row, column=1).value = None
+
     row = start_row
     for fpath in cookie_paths:
         ws.cell(row=row, column=1).value = fpath
