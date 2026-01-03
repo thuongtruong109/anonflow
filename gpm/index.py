@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import started_debug_addrs, started_lock, EXCEL_PATH, COOKIES_DIR, THREADS, START_LIMIT
 import config
 
-from utils import copy_folder, detect_username_from_cookie_filename, safe_print, normalize_proxy, menu_multi_select
+from utils import detect_username_from_cookie_filename, safe_print, normalize_proxy, menu_multi_select
 from excel import update_excel_column_a_with_cookie_files, read_excel
 from services import (
     create_profile,
@@ -23,12 +23,6 @@ def process_row(name, cookie, proxy_raw, index, actions):
         proxy = normalize_proxy(proxy_raw)
 
         if actions["handle_cookies"]:
-            from cookie import convert_cookies_format
-            convert_cookies_format()
-            safe_print(f"✅ Converted cookies format in {COOKIES_DIR}")
-            copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
-            safe_print("✅ Installed extensions to profiles")
-
             try:
                 n = update_excel_column_a_with_cookie_files(EXCEL_PATH, COOKIES_DIR)
                 safe_print(f"✅ Updated {n} cookie paths into column A")

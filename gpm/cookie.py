@@ -23,9 +23,6 @@ def convert_file(filename):
     processing_path = txt_path + ".processing"
     json_path = txt_path.replace(".txt", ".json")
 
-    if os.path.exists(json_path):
-        return
-
     try:
         os.rename(txt_path, processing_path)
 

@@ -193,9 +193,10 @@ def build_common_popup_locators(page: Page):
         # Random 'Not now' button (your snippet)
         page.get_by_role("button", name=re.compile(r"^Not now$", re.I)),
         page.locator("button:has-text('Not now')"),
-        page.locator("button.TUXButton:has-text('Not now')"),  # optional tighter match
+        page.locator("button.TUXButton:has-text('Not now')"),
+        page.locator("[role='dialog'] button.TUXButton.TUXButton--secondary:has(.TUXButton-label)"),
+        page.locator("button.TUXButton.TUXButton--secondary:has(.TUXButton-label)"),
 
-        # Optional common variants
         page.get_by_role(
             "button",
             name=re.compile(r"maybe later|later|cancel|close|dismiss|skip|no thanks", re.I),
@@ -206,7 +207,6 @@ def build_common_popup_locators(page: Page):
         page.locator("button:has-text('Skip')"),
         page.locator("button:has-text('No thanks')"),
 
-        # aria-label contains
         page.locator("button[aria-label*='close' i]"),
         page.locator("button[aria-label*='dismiss' i]"),
     ]

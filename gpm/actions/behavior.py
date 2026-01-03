@@ -1,6 +1,7 @@
 import asyncio, random, re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from playwright.async_api import Page
 
@@ -39,6 +40,47 @@ def _log_action(log_file: str, username: str, video_url: str, action_details: st
             f.write(log_entry)
     except Exception as e:
         print(f"Error logging to {log_file}: {e}")
+
+def _with_lang_param(url: str, lang: str = "en") -> str:
+    try:
+        p = urlparse(url)
+        q = parse_qs(p.query)
+        q["lang"] = [lang]
+        new_query = urlencode(q, doseq=True)
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
+    except Exception:
+        return url
+
+async def check_login_status(page: Page, username: str = "unknown") -> bool:
+    """
+    Kiểm tra xem user đã login chưa bằng cách tìm activity button.
+
+    Returns:
+        True nếu đã login (tìm thấy activity button)
+        False nếu chưa login (không tìm thấy activity button)
+    """
+    try:
+        # Selector cho activity button
+        activity_button_selector = 'button[data-e2e="nav-activity"][aria-label="Activity"]'
+
+        try:
+            activity_btn = page.locator(activity_button_selector).first
+            if await activity_btn.count() > 0 and await activity_btn.is_visible():
+                # Tìm thấy activity button -> đã đăng nhập
+                if username and username != "unknown":
+                    _log_action("login.log", username, page.url, "Login status: true")
+                return True
+        except Exception:
+            pass
+
+        # Không tìm thấy activity button -> chưa đăng nhập
+        if username and username != "unknown":
+            _log_action("login.log", username, page.url, "Login status: false")
+        return False
+
+    except Exception:
+        # Nếu có lỗi, giả định là chưa login để skip like/comment nhưng vẫn thực hiện các hành vi khác
+        return False
 
 async def close_cta_modal_if_any(page: Page) -> bool:
     return await safe_click(page, 'button[data-e2e="alt-middle-cta-cancel-btn"]', timeout_ms=3000)
@@ -106,9 +148,10 @@ async def random_like_video(page: Page, username: str = "unknown") -> bool:
                 like_success = True
                 await sleep_ms(800, 1500)
 
-                # Log action
-                video_url = page.url
-                _log_action("like.log", username, video_url, "Liked video")
+                # Log action - chỉ log khi có username thực sự (không phải "unknown")
+                if username and username != "unknown":
+                    video_url = page.url
+                    _log_action("like.log", username, video_url, "Liked video")
 
                 break
         except Exception:
@@ -223,9 +266,10 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
             except Exception:
                 pass
 
-        # Log action
-        video_url = page.url
-        _log_action("comment.log", username, video_url, f"Commented: {comment_text}")
+        # Log action - chỉ log khi có username thực sự (không phải "unknown")
+        if username and username != "unknown":
+            video_url = page.url
+            _log_action("comment.log", username, video_url, f"Commented: {comment_text}")
 
         return True
 
@@ -238,12 +282,16 @@ async def click_author_avatar_if_any(page: Page) -> bool:
 def is_bridge_link(url: str) -> bool:
     return re.search(r"(onelink\.me|snssdk)", url, re.IGNORECASE) is not None
 
-async def random_interact_in_profile(page: Page):
+async def random_interact_in_profile(page: Page, username: str = "unknown", is_logged_in: bool = True):
     """
     Human-ish profile browsing:
     - slow scroll chunks
     - occasional backtrack
     - hover, pause, open a random video
+
+    Args:
+        username: Tên profile/user thực hiện actions (để log)
+        is_logged_in: Login status (để quyết định có thực hiện like/comment không)
     """
     scroll_rounds = randi(3, 7)
     for _ in range(scroll_rounds):
@@ -292,17 +340,17 @@ async def random_interact_in_profile(page: Page):
     await watch_like_human(page, min_ms=7000, max_ms=22000, mouse_jitter=True)
     await sleep_ms(1200, 5200)
 
-    # Thêm hành vi like ngẫu nhiên (tỉ lệ cao hơn comment)
-    if chance(0.40):  # 40% cơ hội like
+    # Thêm hành vi like ngẫu nhiên (tỉ lệ cao hơn comment) - CHỈ KHI ĐÃ LOGIN
+    if is_logged_in and chance(0.40):  # 40% cơ hội like
         await sleep_ms(600, 1400)
-        like_success = await random_like_video(page, username="profile_user")
+        like_success = await random_like_video(page, username=username)
         if like_success:
             await sleep_ms(800, 1800)
 
-    # Thêm hành vi comment ngẫu nhiên khi xem video trong profile
-    if chance(0.30):  # 30% cơ hội comment (thấp hơn like một xíu)
+    # Thêm hành vi comment ngẫu nhiên khi xem video trong profile - CHỈ KHI ĐÃ LOGIN
+    if is_logged_in and chance(0.30):  # 30% cơ hội comment (thấp hơn like một xíu)
         await sleep_ms(800, 1800)
-        comment_success = await random_comment_on_video(page, username="profile_user")
+        comment_success = await random_comment_on_video(page, username=username)
         if comment_success:
             await sleep_ms(1500, 3000)
 
@@ -322,6 +370,7 @@ async def run_tiktok_flow(
     action_timeout_ms: int = 15_000,
     will_view_min: int = 5,
     will_view_max: int = 15,
+    username: str = "unknown",
 ):
     """
     More natural feed browsing:
@@ -329,9 +378,16 @@ async def run_tiktok_flow(
     - small scroll adjustments
     - occasional comments open/close
     - occasional profile visit
+
+    Args:
+        username: Tên profile/user thực hiện actions (để log)
     """
     page.set_default_navigation_timeout(nav_timeout_ms)
     page.set_default_timeout(action_timeout_ms)
+
+    # Thêm param ?lang=en vào URL trước khi navigate
+    # url_with_lang = _with_lang_param(url, lang="en")
+    # await page.goto(url_with_lang, wait_until="domcontentloaded")
 
     await page.goto(url, wait_until="domcontentloaded")
 
@@ -341,16 +397,19 @@ async def run_tiktok_flow(
     try:
         await close_cta_modal_if_any(page)
 
+        # Kiểm tra login status trước khi thực hiện actions
+        is_logged_in = await check_login_status(page, username=username)
+
         will_view_amount = randi(will_view_min, will_view_max)
 
         for _ in range(will_view_amount):
             # 1) watch current video naturally
             await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
 
-            # 1.5) sometimes like the video (tỉ lệ cao)
-            if chance(0.35):  # 35% cơ hội like video
+            # 1.5) sometimes like the video (tỉ lệ cao) - CHỈ KHI ĐÃ LOGIN
+            if is_logged_in and chance(0.35):  # 35% cơ hội like video
                 await sleep_ms(600, 1400)
-                like_success = await random_like_video(page, username="feed_user")
+                like_success = await random_like_video(page, username=username)
                 if like_success:
                     await sleep_ms(800, 1800)
 
@@ -372,10 +431,10 @@ async def run_tiktok_flow(
                 if chance(0.35):
                     await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
 
-                # Thêm hành vi comment ngẫu nhiên vào video feed
-                if chance(0.40):  # 40% cơ hội comment khi đã mở comment section
+                # Thêm hành vi comment ngẫu nhiên vào video feed - CHỈ KHI ĐÃ LOGIN
+                if is_logged_in and chance(0.40):  # 40% cơ hội comment khi đã mở comment section
                     await sleep_ms(800, 1800)
-                    comment_success = await random_comment_on_video(page, username="feed_user")
+                    comment_success = await random_comment_on_video(page, username=username)
                     if comment_success:
                         await sleep_ms(1500, 3000)
 
@@ -400,7 +459,7 @@ async def run_tiktok_flow(
                 if ok:
                     await close_profile_share_modal_if_any(page)
                     await sleep_ms(800, 2200)
-                    await random_interact_in_profile(page)
+                    await random_interact_in_profile(page, username=username, is_logged_in=is_logged_in)
                     await sleep_ms(700, 2000)
 
             # 5) go next video: ONE space, with a tiny pause after

@@ -13,10 +13,11 @@ pw_jobs_lock = threading.Lock()
 
 start_sem = None
 
+EXTENSION_ID = "kndjfojeoamnpbehojpbflmnleahimkb"
 EXCEL_PATH = "data/proxies.xlsx"
 COOKIES_DIR = "data/cookies"
-EXTENSIONS_DIR = "data/extensions"
-GPM_EXTENSION_LOCATE = "C:\\Users\\admin\\Documents\\GPMLogin\\GlobalExt"
+EXTENSIONS_DIR = f"data/{EXTENSION_ID}"
+GPM_EXTENSION_LOCATE = f"C:/Users/admin/Documents/GPMLogin/GlobalExt/{EXTENSION_ID}"
 
 THREADS = 6
 START_LIMIT = 5
@@ -35,7 +36,7 @@ ROWS = 3
 COLS = 4
 
 START_WIN_SCALE = None
-START_WIN_SIZE = "470,347"
+START_WIN_SIZE = "468,350"
 
 def setup_logger():
     logger = logging.getLogger("my_app")
@@ -60,16 +61,6 @@ def setup_logger():
 
     # file_handler = logging.FileHandler("app.log", encoding="utf-8")
     # file_handler.setLevel(logging.DEBUG)
-    # file_handler.setFormatter(formatter)
-    # logger.addHandler(file_handler)
-
-    # file_handler = logging.FileHandler("like.log", encoding="utf-8")
-    # file_handler.setLevel(logging.INFO)
-    # file_handler.setFormatter(formatter)
-    # logger.addHandler(file_handler)
-
-    # file_handler = logging.FileHandler("comment.log", encoding="utf-8")
-    # file_handler.setLevel(logging.INFO)
     # file_handler.setFormatter(formatter)
     # logger.addHandler(file_handler)
 

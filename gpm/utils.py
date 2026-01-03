@@ -93,7 +93,7 @@ def menu_multi_select():
                 cur = (cur + 1) % len(opts)
 
 def detect_username_from_cookie_filename(text: str) -> str:
-    username = re.search(r'\[([^\]]+)\]\.json$', text)
+    username = re.search(r'\[([^\]]+)\]\.txt$', text)
     return username.group(1) if username else "Unknown"
 
 def copy_folder(source: str, destination: str):
