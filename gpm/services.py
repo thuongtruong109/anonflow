@@ -57,12 +57,21 @@ def get_profile_id(name: str) -> str:
             return pid
     raise RuntimeError("Profile not found")
 
-def start_profile(pid: str, index: int) -> str:
+def start_profile(pid: str, index: int, total_profiles: int = None) -> str:
     with config.start_sem:
-        params = {
-            "win_size": START_WIN_SIZE,
-            "win_pos": compute_win_pos(index)
-        }
+        win_info = compute_win_pos(index, total_profiles)
+        parts = win_info.split(",")
+
+        params = {}
+        if len(parts) == 4:
+            # Format mới: x,y,w,h
+            params["win_pos"] = f"{parts[0]},{parts[1]}"
+            params["win_size"] = f"{parts[2]},{parts[3]}"
+        else:
+            # Format cũ: x,y (fallback)
+            params["win_pos"] = win_info
+            params["win_size"] = START_WIN_SIZE
+
         if START_WIN_SCALE is not None:
             params["win_scale"] = START_WIN_SCALE
 

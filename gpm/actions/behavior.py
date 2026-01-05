@@ -601,7 +601,7 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
     if has_no_content:
         try:
             await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            await page.wait_for_load_state("networkidle", timeout=60000)
             await sleep_ms(2000, 4000)
             await close_cta_modal_if_any(page)
         except Exception:
