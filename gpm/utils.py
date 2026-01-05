@@ -3,7 +3,7 @@ import re, os, sys, shutil
 from typing import List
 from config import print_lock, setup_logger, START_WIN_SIZE, ROWS, COLS, SCREEN_H, TASKBAR_H, GAP
 
-log = setup_logger()
+log = setup_logger("act")
 
 def safe_print(*args):
     with print_lock:
@@ -97,18 +97,13 @@ def detect_username_from_cookie_filename(text: str) -> str:
     return username.group(1) if username else "Unknown"
 
 def copy_folder(source: str, destination: str):
-    try:
-        if os.path.exists(destination) and os.listdir(destination):
-            return
-        os.makedirs(destination, exist_ok=True)
+    os.makedirs(destination, exist_ok=True)
 
-        for item in os.listdir(source):
-            src_path = os.path.join(source, item)
-            dst_path = os.path.join(destination, item)
+    for item in os.listdir(source):
+        src_path = os.path.join(source, item)
+        dst_path = os.path.join(destination, item)
 
-            if os.path.isdir(src_path):
-                copy_folder(src_path, dst_path)
-            else:
-                shutil.copy2(src_path, dst_path)
-    except Exception as e:
-        safe_print(f"⚠️ Skipped copying {source} to {destination} (file in use or error): {e}")
+        if os.path.isdir(src_path):
+            copy_folder(src_path, dst_path)
+        else:
+            shutil.copy2(src_path, dst_path)

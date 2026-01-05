@@ -84,11 +84,15 @@ async def run_proxy(playwright, proxy: Dict[str, str], index1: int) -> None:
             args=[
                 f"--window-position={x},{y}",
                 f"--window-size={WINDOW_W},{WINDOW_H}",
+                "--disable-session-crashed-bubble",
+                "--disable-infobars",
+                "--disable-notifications",
+                "--disable-restore-session-state",
+                "--no-default-browser-check",
+                "--no-first-run",
+                "--disable-features=TranslateUI",
             ] if not HEADLESS else [],
         )
-
-        context.set_default_timeout(30_000)
-        context.set_default_navigation_timeout(120_000)
 
         page = context.pages[0] if context.pages else await context.new_page()
 

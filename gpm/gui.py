@@ -124,7 +124,7 @@ class GPMMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_worker = None
-        self.logger = setup_logger()
+        self.logger = setup_logger("gui")
         self.init_ui()
 
     def init_ui(self):
@@ -261,7 +261,7 @@ class GPMMainWindow(QMainWindow):
         """)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(2)
+        layout.setSpacing(1)
 
         title = QLabel("🚀 GPM Automation Suite")
         title.setFont(QFont("Segoe UI", 16, QFont.Bold))

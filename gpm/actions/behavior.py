@@ -20,6 +20,8 @@ from actions.common import (
 )
 from comment import TextRandomizer
 
+TARGET_PIVOT = "https://www.tiktok.com/@moises2743"
+
 # Global để lưu URL video hiện tại
 _current_video_url = None
 
@@ -208,7 +210,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
                         "login.log",
                         username,
                         page.url,
-                        f"Login status: true (alternative selector: {selector})"
+                        f"Login status: true"
                     )
                 return True
 
@@ -220,7 +222,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
                     "login.log",
                     username,
                     page.url,
-                    "Login status: false (follow-button found)"
+                    "Login status: false"
                 )
             return False
 
@@ -233,7 +235,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
                         "login.log",
                         username,
                         page.url,
-                        f"Login status: false (alternative selector: {selector})"
+                        f"Login status: false"
                     )
                 return False
 
@@ -281,6 +283,102 @@ async def close_profile_share_modal_if_any(page: Page) -> bool:
 
 async def click_author_avatar_if_any(page: Page) -> bool:
     return await safe_click(page, 'a[data-e2e="video-author-avatar"]', timeout_ms=3500)
+
+async def visit_target_pivot_and_follow(page: Page, username: str = "unknown", max_retries: int = 3) -> bool:
+    """
+    Vào TARGET_PIVOT profile và click nút follow.
+
+    Args:
+        page: Playwright Page object
+        username: Tên người dùng thực hiện action (người follow)
+        max_retries: Số lần retry nếu fail
+
+    Returns:
+        True nếu follow thành công, False nếu không
+    """
+    target_username = TARGET_PIVOT.split("/@")[-1] if "/@" in TARGET_PIVOT else "unknown"
+
+    for attempt in range(max_retries):
+        try:
+            # Navigate đến TARGET_PIVOT profile - để tự load, không set timeout cứng
+            await page.goto(TARGET_PIVOT, wait_until="domcontentloaded")
+            await sleep_ms(2000, 4000)
+
+            # Close modal nếu có
+            await close_cta_modal_if_any(page)
+            await close_profile_share_modal_if_any(page)
+            await sleep_ms(800, 1500)
+
+            # Tìm nút follow - chờ đủ lâu để nó load
+            follow_button_selector = 'button[data-e2e="follow-button"]'
+
+            # Chờ button xuất hiện, không set timeout cứng
+            try:
+                await page.wait_for_selector(follow_button_selector, state="visible", timeout=30000)
+            except Exception:
+                if attempt < max_retries - 1:
+                    await sleep_ms(2000, 3000)
+                    continue
+                return False
+
+            follow_btn = page.locator(follow_button_selector).first
+
+            # Đợi thêm để chắc chắn button đã sẵn sàng
+            await sleep_ms(1000, 1500)
+
+            if await follow_btn.count() > 0 and await follow_btn.is_visible():
+                # Kiểm tra xem đã follow chưa
+                try:
+                    button_text = await follow_btn.inner_text(timeout=5000)
+
+                    # Nếu button text là "Following" hoặc "Đang follow" thì đã follow rồi
+                    if button_text and ("following" in button_text.lower() or "đang" in button_text.lower()):
+                        return False
+                except Exception:
+                    pass
+
+                # Scroll button vào view nếu cần
+                try:
+                    await follow_btn.scroll_into_view_if_needed(timeout=5000)
+                    await sleep_ms(500, 1000)
+                except Exception:
+                    pass
+
+                # Click nút follow với force click để chắc chắn
+                try:
+                    await follow_btn.click(force=True, timeout=10000)
+                    await sleep_ms(1500, 2500)
+
+                    # Verify click thành công bằng cách check text đã đổi chưa
+                    try:
+                        new_text = await follow_btn.inner_text(timeout=5000)
+                        if new_text and ("following" in new_text.lower() or "đang" in new_text.lower()):
+                            # Follow thành công! Log vào follow.log
+                            _log_action("follow.log", username, TARGET_PIVOT, f"Successfully followed {target_username}")
+                            return True
+                    except Exception:
+                        pass
+
+                    # Nếu không verify được bằng text, coi như thành công và log
+                    _log_action("follow.log", username, TARGET_PIVOT, f"Clicked follow button for {target_username}")
+                    return True
+
+                except Exception as click_err:
+                    if attempt < max_retries - 1:
+                        await sleep_ms(2000, 3000)
+                        continue
+                    return False
+
+            return False
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                await sleep_ms(2000, 3000)
+                continue
+            return False
+
+    return False
+
 
 async def random_like_video(page: Page, username: str = "unknown") -> bool:
     """
@@ -589,6 +687,13 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
         if comment_success:
             await sleep_ms(1500, 3000)
 
+    # Thêm hành vi visit TARGET_PIVOT và follow - CHỈ KHI ĐÃ LOGIN
+    if is_logged_in and chance(0.12):  # 12% cơ hội follow TARGET_PIVOT từ profile
+        await sleep_ms(1000, 2500)
+        follow_success = await visit_target_pivot_and_follow(page, username=username)
+        if follow_success:
+            await sleep_ms(1500, 3000)
+
     try:
         await page.go_back()
     except Exception:
@@ -704,6 +809,21 @@ async def run_tiktok_flow(
 
                 if not has_bridge:
                     await close_exit_if_any(page)
+
+            # 3.5) sometimes visit TARGET_PIVOT and follow - CHỈ KHI ĐÃ LOGIN
+            if is_logged_in and chance(0.8):  # 30% cơ hội follow TARGET_PIVOT
+                await sleep_ms(1000, 2500)
+                follow_success = await visit_target_pivot_and_follow(page, username=username)
+                if follow_success:
+                    await sleep_ms(1500, 3000)
+                    # Sau khi follow, quay về /foryou
+                    try:
+                        await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                        await sleep_ms(2000, 4000)
+                        await close_cta_modal_if_any(page)
+                    except Exception:
+                        pass
 
             # 4) sometimes visit author profile and interact
             if chance(0.18):

@@ -22,7 +22,7 @@ async def sleep_ms(min_ms: int, max_ms: int | None = None):
 async def human_pause(min_ms: int = 250, max_ms: int = 900):
     await sleep_ms(min_ms, max_ms)
 
-async def safe_click(page: Page, selector: str, *, timeout_ms: int = 3000) -> bool:
+async def safe_click(page: Page, selector: str, *, timeout_ms: int = 8000) -> bool:
     try:
         loc = page.locator(selector).first
         await loc.wait_for(state="visible", timeout=timeout_ms)
@@ -206,6 +206,8 @@ def build_common_popup_locators(page: Page):
 
         page.locator("button[aria-label*='close' i]"),
         page.locator("button[aria-label*='dismiss' i]"),
+
+        page.locator(":text('Switch to public')")
     ]
 
 async def popup_watcher(

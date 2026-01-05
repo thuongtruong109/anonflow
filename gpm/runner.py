@@ -2,10 +2,9 @@ import asyncio, requests
 from typing import List, Tuple, Dict, Any
 
 from playwright.async_api import async_playwright
-from actions.cookie import import_cookie
-from utils import safe_print, copy_folder
+from actions.cookie import import_txt_cookie
+from utils import safe_print
 from actions.behavior import run_tiktok_flow
-import config
 
 Job = Tuple[str, str, str]  # (profile_name, addr, cookie)
 
@@ -44,20 +43,16 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        context.set_default_timeout(30_000)
-        context.set_default_navigation_timeout(120_000)
 
         page = context.pages[0] if context.pages else await context.new_page()
 
         if actions.get("import"):
-            copy_folder(config.EXTENSIONS_DIR, config.GPM_EXTENSION_LOCATE)
-            safe_print(f"✅ Extensions copied to GPM location")
             try:
                 async with async_playwright() as p:
                     browser = await p.chromium.connect_over_cdp(addr)
                     context = browser.contexts[0]
                     page = await context.new_page()
-                    await import_cookie(page, name, cookie)
+                    await import_txt_cookie(page, name, cookie)
                     safe_print(f"✅ Imported cookie for {name}")
             except Exception as e:
                 safe_print(f"❌ Import failed for {name}: {e}")
