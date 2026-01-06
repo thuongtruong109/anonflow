@@ -4,7 +4,7 @@ from typing import Optional, Dict, List, Tuple
 
 from playwright.async_api import async_playwright, TimeoutError
 
-from actions import run_tiktok_flow
+from launch.actions import run_tiktok_flow
 
 MAX_CONCURRENT = 5
 HEADLESS = False

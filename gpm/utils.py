@@ -11,12 +11,11 @@ def safe_print(*args):
 
 def calculate_optimal_grid(total_profiles: int) -> tuple[int, int]:
     """
-    Tính toán grid tối ưu dựa trên số lượng profile.
-    Ví dụ:
+    Examples:
     - 1-4 profiles: 2x2
-    - 5-6 profiles: 3x2 hoặc 2x3
+    - 5-6 profiles: 3x2 or 2x3
     - 7-9 profiles: 3x3
-    - 10-12 profiles: 4x3 (mặc định)
+    - 10-12 profiles: 4x3 (default)
     - >12 profiles: 4x(n)
     """
     if total_profiles <= 0:
@@ -29,7 +28,6 @@ def calculate_optimal_grid(total_profiles: int) -> tuple[int, int]:
     elif total_profiles <= 9:
         return 3, 3
     else:
-        # Sử dụng grid mặc định 4x3 cho 10-12, hoặc tăng rows nếu cần
         return COLS, ROWS
 
 def compute_win_pos(index: int, total_profiles: int = None) -> str:
@@ -103,41 +101,6 @@ def list_filepaths(folder: str, base: str = ".") -> List[str]:
 
     files.sort(key=lambda p: os.path.basename(p).lower())
     return files
-
-def menu_multi_select():
-    import msvcrt, os
-    opts = [
-        "Handle cookies",
-        "Create profiles",
-        "Start profiles",
-        "Attach CDP",
-        "Import cookies",
-        "Close profiles",
-        "Delete profiles",
-        "Exit"
-    ]
-    sel = [False] * len(opts)
-    cur = 0
-
-    while True:
-        os.system("cls")
-        print("↑ ↓ move | SPACE select | ENTER run | ESC exit\n")
-        for i, o in enumerate(opts):
-            print(("➤" if i == cur else " "), "[x]" if sel[i] else "[ ]", o)
-
-        k = msvcrt.getch()
-        if k == b"\x1b":
-            sys.exit(0)
-        if k == b"\r":
-            return sel
-        if k == b" ":
-            sel[cur] = not sel[cur]
-        if k in (b"\xe0", b"\x00"):
-            k2 = msvcrt.getch()
-            if k2 == b"H":
-                cur = (cur - 1) % len(opts)
-            elif k2 == b"P":
-                cur = (cur + 1) % len(opts)
 
 def detect_username_from_cookie_filename(text: str) -> str:
     username = re.search(r'\[([^\]]+)\]\.txt$', text)

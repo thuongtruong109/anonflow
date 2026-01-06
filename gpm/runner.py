@@ -31,29 +31,48 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             safe_print(f"❌ [{name}] Missing addr")
             return
 
-        if addr.startswith("ws://"):
-            browser = await p.chromium.connect(addr)
-            safe_print(f"✅ [{name}] Connected to CDP WS: {addr}")
-        else:
-            ok = await _wait_cdp_http_ready(addr)
-            if not ok:
-                safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
-                return
-            browser = await p.chromium.connect_over_cdp(addr)
-            safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
+        # if addr.startswith("ws://"):
+        #     browser = await p.chromium.connect(addr)
+        #     safe_print(f"✅ [{name}] Connected to CDP WS: {addr}")
+        # else:
+        #     ok = await _wait_cdp_http_ready(addr)
+        #     if not ok:
+        #         safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
+        #         return
+        #     browser = await p.chromium.connect_over_cdp(addr)
+        #     safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
+
+        ok = await _wait_cdp_http_ready(addr)
+        if not ok:
+            safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
+            return
+        browser = await p.chromium.connect_over_cdp(addr)
+        safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
+
+        await context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        """)
 
         page = context.pages[0] if context.pages else await context.new_page()
 
         if actions.get("import"):
             try:
-                async with async_playwright() as p:
-                    browser = await p.chromium.connect_over_cdp(addr)
-                    context = browser.contexts[0]
-                    page = await context.new_page()
-                    await import_txt_cookie(page, name, cookie)
-                    safe_print(f"✅ Imported cookie for {name}")
+                # async with async_playwright() as p:
+                #     browser = await p.chromium.connect_over_cdp(addr)
+                #     context = browser.contexts[0]
+                #     page = await context.new_page()
+                #     await import_txt_cookie(page, name, cookie)
+                #     safe_print(f"✅ Imported cookie for {name}")
+
+                browser = await p.chromium.connect_over_cdp(addr)
+                context = browser.contexts[0]
+                page = await context.new_page()
+                await import_txt_cookie(page, name, cookie)
+                safe_print(f"✅ Imported cookie for {name}")
             except Exception as e:
                 safe_print(f"❌ Import failed for {name}: {e}")
 

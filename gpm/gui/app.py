@@ -1,10 +1,4 @@
-"""
-GPM Automation - GUI Application
-Modern Qt-based interface for GPM automation tasks
-"""
-import sys
-import asyncio
-import threading
+import sys, asyncio, threading
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -16,15 +10,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QFont, QTextCursor
 
-# Import GPM modules
 import config
 from config import setup_logger
 from excel import update_excel_column_a_with_cookie_files, read_excel
 from services import create_profile, start_profile, close_profile, delete_profile
 from runner import run_all_playwright
-from utils import safe_print, menu_multi_select
-from index import process_row
-
+from utils import safe_print
+from handler import process_row
 
 class OutputRedirector:
     """Redirect stdout/stderr to GUI terminal"""
@@ -265,6 +257,26 @@ class GPMMainWindow(QMainWindow):
                 background-color: transparent;
                 height: 0px;
             }
+            QScrollBar:vertical {
+                background-color: #1a1a1a;
+                width: 8px;
+                border-radius: 1rem;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555555;
+                border-radius: 1rem;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #777777;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+                border: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
         """)
 
     def create_header(self):
@@ -423,7 +435,7 @@ class GPMMainWindow(QMainWindow):
         group = QGroupBox("📋 Automation Tasks")
         layout = QVBoxLayout()
         layout.setSpacing(8)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -435,16 +447,16 @@ class GPMMainWindow(QMainWindow):
             QScrollBar:vertical {
                 border: none;
                 background-color: #1a1a1a;
-                width: 10px;
-                border-radius: 5px;
+                width: 8px;
+                border-radius: 1rem;
             }
             QScrollBar::handle:vertical {
-                background-color: #2196F3;
-                border-radius: 5px;
+                background-color: #555555;
+                border-radius: 1rem;
                 min-height: 20px;
             }
             QScrollBar::handle:vertical:hover {
-                background-color: #42A5F5;
+                background-color: #777777;
             }
         """)
 
@@ -452,7 +464,7 @@ class GPMMainWindow(QMainWindow):
         tasks_container = QWidget()
         tasks_layout = QVBoxLayout(tasks_container)
         tasks_layout.setSpacing(6)
-        tasks_layout.setContentsMargins(0, 0, 0, 0)
+        tasks_layout.setContentsMargins(0, 0, 10, 0)
 
         # Define tasks with their metadata (name, icon, original_index, has_options)
         tasks = [
@@ -1163,8 +1175,7 @@ class GPMMainWindow(QMainWindow):
                 f.write(self.terminal.toPlainText())
             self.log(f"💾 Log saved: {file_path}")
 
-
-def main():
+def run_gui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
@@ -1172,7 +1183,3 @@ def main():
     window.show()
 
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

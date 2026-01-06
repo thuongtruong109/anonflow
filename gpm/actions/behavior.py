@@ -47,33 +47,33 @@ def _log_action(log_file: str, username: str, video_url: str, action_details: st
         print(f"Error logging to {log_file}: {e}")
 
 
-async def inject_video_detector(page: Page) -> bool:
-    """
-    Inject JavaScript code để detect video đang xem hiện tại.
-    Script này sẽ tự động track video URL và expose qua console.
+# async def inject_video_detector(page: Page) -> bool:
+#     """
+#     Inject JavaScript code để detect video đang xem hiện tại.
+#     Script này sẽ tự động track video URL và expose qua console.
 
-    Returns:
-        True nếu inject thành công, False nếu không
-    """
-    try:
-        # Đọc nội dung file detect-video.js
-        script_path = Path(__file__).parent / "detect-video.js"
+#     Returns:
+#         True nếu inject thành công, False nếu không
+#     """
+#     try:
+#         # Đọc nội dung file detect-video.js
+#         script_path = Path(__file__).parent / "detect-video.js"
 
-        if not script_path.exists():
-            print(f"Warning: {script_path} not found")
-            return False
+#         if not script_path.exists():
+#             print(f"Warning: {script_path} not found")
+#             return False
 
-        with open(script_path, "r", encoding="utf-8") as f:
-            js_code = f.read()
+#         with open(script_path, "r", encoding="utf-8") as f:
+#             js_code = f.read()
 
-        # Inject script vào page
-        await page.evaluate(js_code)
-        await sleep_ms(500, 800)
-        return True
+#         # Inject script vào page
+#         await page.evaluate(js_code)
+#         await sleep_ms(500, 800)
+#         return True
 
-    except Exception as e:
-        print(f"Error injecting video detector: {e}")
-        return False
+#     except Exception as e:
+#         print(f"Error injecting video detector: {e}")
+#         return False
 
 
 async def get_current_video_url(page: Page) -> str | None:
@@ -149,13 +149,6 @@ async def get_current_video_url(page: Page) -> str | None:
 
 
 async def track_and_log_video(page: Page, username: str = "unknown") -> None:
-    """
-    Track video đang xem và log vào like.log khi video thay đổi.
-
-    Args:
-        page: Playwright Page object
-        username: Tên người dùng (để log)
-    """
     global _current_video_url
 
     try:
@@ -164,7 +157,6 @@ async def track_and_log_video(page: Page, username: str = "unknown") -> None:
         if video_url and video_url != _current_video_url:
             _current_video_url = video_url
 
-            # Log vào like.log với action "Now watching"
             if username and username != "unknown":
                 _log_action("like.log", username, video_url, "Now watching")
 
@@ -635,7 +627,7 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
     if not links:
         try:
             await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            await page.wait_for_load_state("networkidle", timeout=60000)
             await sleep_ms(2000, 4000)
             await close_cta_modal_if_any(page)
         except Exception:
@@ -662,7 +654,7 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
 
     # Đợi page load sau khi click vào video
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+        await page.wait_for_load_state("domcontentloaded", timeout=30000)
         await sleep_ms(1000, 2000)
     except Exception:
         pass
@@ -705,8 +697,6 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
 async def run_tiktok_flow(
     page: Page,
     *,
-    nav_timeout_ms: int = 60_000,
-    action_timeout_ms: int = 15_000,
     will_view_min: int = 5,
     will_view_max: int = 15,
     username: str = "foryou",
@@ -722,12 +712,10 @@ async def run_tiktok_flow(
     Args:
         username: Tên profile/user thực hiện actions (để log)
     """
-    page.set_default_navigation_timeout(nav_timeout_ms)
-    page.set_default_timeout(action_timeout_ms)
 
     # 1. Vào profile page để check login status
     await page.goto(f"https://www.tiktok.com/@{username}?lang=en", wait_until="load")
-    await page.wait_for_load_state("networkidle", timeout=10000)
+    await page.wait_for_load_state("networkidle", timeout=30000)
 
     # ✅ start watcher (background)
     watcher = start_popup_watcher(page)
@@ -746,14 +734,11 @@ async def run_tiktok_flow(
         # 4. Nếu đã login, chuyển về /foryou để thực hiện behaviors
         try:
             await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            await page.wait_for_load_state("networkidle", timeout=30000)
             await sleep_ms(2000, 4000)
             await close_cta_modal_if_any(page)
         except Exception:
             pass
-
-        # 4.5. Inject video detector script
-        await inject_video_detector(page)
 
         will_view_amount = randi(will_view_min, will_view_max)
 
@@ -819,7 +804,7 @@ async def run_tiktok_flow(
                     # Sau khi follow, quay về /foryou
                     try:
                         await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-                        await page.wait_for_load_state("networkidle", timeout=10000)
+                        await page.wait_for_load_state("networkidle", timeout=30000)
                         await sleep_ms(2000, 4000)
                         await close_cta_modal_if_any(page)
                     except Exception:
@@ -832,7 +817,7 @@ async def run_tiktok_flow(
                 if ok:
                     # Đợi page load sau khi click vào avatar
                     try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                        await page.wait_for_load_state("domcontentloaded", timeout=30000)
                         await sleep_ms(1000, 2000)
                     except Exception:
                         pass
