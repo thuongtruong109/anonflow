@@ -100,3 +100,11 @@ def delete_profile(pid: str):
 def remember_debug_addr(name: str, addr: str):
     with started_lock:
         started_debug_addrs.append((name, addr))
+
+def get_debug_addr(name: str) -> str | None:
+    """Get existing debug address for a profile if it's already started"""
+    with started_lock:
+        for n, addr in started_debug_addrs:
+            if n == name:
+                return addr
+    return None

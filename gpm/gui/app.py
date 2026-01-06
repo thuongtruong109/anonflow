@@ -5,10 +5,14 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QGroupBox, QGridLayout, QMessageBox,
     QFileDialog, QSplitter, QFrame, QLineEdit, QSpinBox, QCheckBox,
-    QScrollArea
+    QScrollArea, QRadioButton
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QFont, QTextCursor
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from config import setup_logger
@@ -123,11 +127,20 @@ class ModernButton(QPushButton):
         b = max(0, min(255, b + amount))
         return f"#{r:02x}{g:02x}{b:02x}"
 
+    def darken_color(self, hex_color, amount=30):
+        hex_color = hex_color.lstrip('#')
+        r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        r = max(0, min(255, r - amount))
+        g = max(0, min(255, g - amount))
+        b = max(0, min(255, b - amount))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
 class GPMMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_worker = None
         self.logger = setup_logger("gui")
+        self.task_buttons = []
         self.task_checkboxes = []
         self.task_queue = []
         self.task_options = {}
@@ -136,7 +149,7 @@ class GPMMainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Anonflow")
-        self.setMinimumSize(1280, 750)
+        self.setMinimumSize(1250, 750)
 
         self.apply_dark_theme()
 
@@ -173,7 +186,16 @@ class GPMMainWindow(QMainWindow):
         top_widget = QWidget()
         top_layout = QHBoxLayout(top_widget)
         top_layout.setSpacing(10)
-        top_layout.addWidget(self.create_tasks_section(), 1)
+        top_layout.addWidget(self.create_behavior_actions_section(), 1)
+
+        # Right column: Cookie Setting above Automation Tasks
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setSpacing(10)
+        right_layout.addWidget(self.create_cookie_setting_section())
+        right_layout.addWidget(self.create_tasks_section())
+        top_layout.addWidget(right_widget, 2)
+
         splitter.addWidget(top_widget)
 
         # Bottom section: Terminal
@@ -331,6 +353,7 @@ class GPMMainWindow(QMainWindow):
         # Start Limit
         limit_label = QLabel("Start Limit:")
         limit_label.setFont(QFont("Segoe UI", 9))
+
         self.start_limit = QSpinBox()
         self.start_limit.setRange(1, 50)
         self.start_limit.setValue(config.START_LIMIT)
@@ -343,22 +366,31 @@ class GPMMainWindow(QMainWindow):
 
         layout.addLayout(settings_layout)
 
-        # Cookie buttons row
-        cookie_buttons_layout = QHBoxLayout()
-        cookie_buttons_layout.setSpacing(6)
-
-        view_cookie_btn = ModernButton("View Cookies", "📂", "#9C27B0")
-        view_cookie_btn.setMinimumHeight(32)
-        view_cookie_btn.clicked.connect(self.view_cookie_folder)
-
-        import_cookie_btn = ModernButton("Import Cookie", "📥", "#FF5722")
-        import_cookie_btn.setMinimumHeight(32)
-        import_cookie_btn.clicked.connect(self.import_cookie_file)
-
-        cookie_buttons_layout.addWidget(view_cookie_btn)
-        cookie_buttons_layout.addWidget(import_cookie_btn)
-
-        layout.addLayout(cookie_buttons_layout)
+        # Run with CDP checkbox
+        self.run_with_cdp_checkbox = QCheckBox("Run with CDP")
+        self.run_with_cdp_checkbox.setChecked(True)  # Default is checked (True)
+        self.run_with_cdp_checkbox.setFont(QFont("Segoe UI", 9))
+        self.run_with_cdp_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #ffffff;
+                spacing: 5px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #2196F3;
+                background-color: #1a1a1a;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #2196F3;
+                background-color: #2196F3;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.run_with_cdp_checkbox)
 
         group.setLayout(layout)
         return group
@@ -410,17 +442,21 @@ class GPMMainWindow(QMainWindow):
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(8)
 
-        reload_btn = ModernButton("Reload Excel Data", "🔄", "#FF9800")
-        reload_btn.clicked.connect(self.load_excel_data)
+        create_profiles_btn = ModernButton("Create Profiles", "➕", "#2196F3")
+        create_profiles_btn.clicked.connect(self.create_profiles)
 
-        view_btn = ModernButton("View Data File", "📊", "#9C27B0")
+        view_btn = ModernButton("View File", "📊", "#9C27B0")
         view_btn.clicked.connect(self.view_excel_file)
+
+        reload_btn = ModernButton("Reload", "🔄", "#FF9800")
+        reload_btn.clicked.connect(self.load_excel_data)
 
         save_btn = ModernButton("Save Changes", "💾", "#4CAF50")
         save_btn.clicked.connect(self.save_proxies_to_excel)
 
-        buttons_layout.addWidget(reload_btn)
+        buttons_layout.addWidget(create_profiles_btn)
         buttons_layout.addWidget(view_btn)
+        buttons_layout.addWidget(reload_btn)
         buttons_layout.addWidget(save_btn)
 
         main_layout.addLayout(buttons_layout)
@@ -432,10 +468,597 @@ class GPMMainWindow(QMainWindow):
         return group
 
     def create_tasks_section(self):
-        group = QGroupBox("📋 Automation Tasks")
+        group = QGroupBox("📋 Tasks")
+        layout = QVBoxLayout()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background-color: #1a1a1a;
+                width: 8px;
+                border-radius: 1rem;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555555;
+                border-radius: 1rem;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #777777;
+            }
+        """)
+
+        # Container for all tasks
+        tasks_container = QWidget()
+        tasks_layout = QGridLayout(tasks_container)
+
+        # Define tasks with their metadata (name, icon, original_index, has_options, color)
+        tasks = [
+            ("Start Profiles", "▶️", 0, False, "#4CAF50"),  # Green - single button
+            ("Close Profiles", "⏹️", 1, False, "#FF9800"),         # Orange
+            ("Delete Profiles", "🗑️", 2, False, "#F44336"),       # Red
+        ]
+
+        self.task_buttons = []
+        self.task_options = {}  # Store option widgets for each task
+
+        # Create and add stop button first (will be positioned next to Start Profiles)
+        self.stop_btn = ModernButton("🛑  Stop Tasks", "", "#F44336")
+        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setFont(QFont("Segoe UI", 9))
+        self.stop_btn.clicked.connect(self.stop_tasks)
+        self.stop_btn.setEnabled(False)  # Disabled by default
+
+        for i, (name, icon, idx, has_options, color) in enumerate(tasks):
+            # Create task item container (remove wrapper, just use button directly)
+            button = ModernButton(f"{icon}  {name}", "", color)
+            button.setMinimumHeight(40)
+            button.setFont(QFont("Segoe UI", 9))
+
+            # Add arrow button if task has options
+            arrow_btn = None
+            options_widget = None
+            if has_options:
+                # Create a container for button and arrow
+                task_container = QWidget()
+                task_layout = QHBoxLayout(task_container)
+                task_layout.setContentsMargins(0, 0, 0, 0)
+                task_layout.setSpacing(4)
+
+                task_layout.addWidget(button)
+
+                arrow_btn = QPushButton("▼")
+                arrow_btn.setMaximumWidth(30)
+                arrow_btn.setMaximumHeight(35)
+                arrow_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {color};
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        font-weight: bold;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {self.lighten_color(color)};
+                    }}
+                    QPushButton:pressed {{
+                        background-color: {self.darken_color(color)};
+                    }}
+                """)
+                arrow_btn.setCursor(Qt.PointingHandCursor)
+                task_layout.addWidget(arrow_btn)
+
+                # Create options widget (initially hidden)
+                options_widget = QWidget()
+                options_widget.setVisible(False)
+                options_layout = QVBoxLayout(options_widget)
+                options_layout.setContentsMargins(20, 4, 4, 4)
+                options_layout.setSpacing(4)
+
+            # Add arrow button if task has options
+            arrow_btn = None
+            options_widget = None
+            if has_options:
+                arrow_btn = QPushButton("▼")
+                arrow_btn.setMaximumWidth(30)
+                arrow_btn.setMaximumHeight(35)
+                arrow_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {color};
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        font-weight: bold;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {self.lighten_color(color)};
+                    }}
+                    QPushButton:pressed {{
+                        background-color: {self.darken_color(color)};
+                    }}
+                """)
+                arrow_btn.setCursor(Qt.PointingHandCursor)
+                task_layout.addWidget(arrow_btn)
+
+                # Create options widget (initially hidden)
+                options_widget = QWidget()
+                options_widget.setVisible(False)
+                options_layout = QVBoxLayout(options_widget)
+                options_layout.setContentsMargins(20, 4, 4, 4)
+                options_layout.setSpacing(4)
+
+                # Add specific options based on task
+                if name == "Run Automation":
+                    # Add follower input as example
+                    follower_layout = QHBoxLayout()
+                    follower_label = QLabel("👥 Target Followers:")
+                    follower_label.setFont(QFont("Segoe UI", 9))
+                    follower_label.setStyleSheet("color: #bbdefb;")
+
+                    follower_input = QSpinBox()
+                    follower_input.setRange(1, 10000)
+                    follower_input.setValue(100)
+                    follower_input.setStyleSheet("""
+                        QSpinBox {
+                            background-color: #0d0d0d;
+                            color: #2196F3;
+                            border: 1px solid #2196F3;
+                            border-radius: 4px;
+                            padding: 4px;
+                            font-size: 9pt;
+                            font-weight: bold;
+                        }
+                        QSpinBox:focus {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+                    follower_input.setMinimumWidth(100)
+
+                    follower_layout.addWidget(follower_label)
+                    follower_layout.addWidget(follower_input)
+                    follower_layout.addStretch()
+
+                    options_layout.addLayout(follower_layout)
+
+                    # Store reference to follower input
+                    self.task_options[name] = {
+                        'widget': options_widget,
+                        'follower_input': follower_input
+                    }
+
+                elif name == "Follow":
+                    # Follow mode selection
+                    mode_layout = QVBoxLayout()
+                    mode_layout.setSpacing(4)
+
+                    # Radio buttons for follow modes
+                    radio_layout = QHBoxLayout()
+                    radio_layout.setSpacing(10)
+
+                    random_radio = QRadioButton("Random")
+                    random_radio.setFont(QFont("Segoe UI", 9))
+                    random_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    mutual_radio = QRadioButton("Mutual")
+                    mutual_radio.setFont(QFont("Segoe UI", 9))
+                    mutual_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    target_radio = QRadioButton("Target")
+                    target_radio.setFont(QFont("Segoe UI", 9))
+                    target_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    # Set random as default
+                    random_radio.setChecked(True)
+
+                    radio_layout.addWidget(random_radio)
+                    radio_layout.addWidget(mutual_radio)
+                    radio_layout.addWidget(target_radio)
+                    radio_layout.addStretch()
+
+                    mode_layout.addLayout(radio_layout)
+
+                    # Target username input (initially hidden)
+                    target_layout = QHBoxLayout()
+
+                    target_input = QLineEdit()
+                    target_input.setPlaceholderText("Enter @username...")
+                    target_input.setStyleSheet("""
+                        QLineEdit {
+                            background-color: #0d0d0d;
+                            color: #2196F3;
+                            border: 1px solid #2196F3;
+                            border-radius: 4px;
+                            padding: 4px;
+                            font-size: 9pt;
+                            margin-top: 4px;
+                        }
+                    """)
+                    target_input.setMinimumWidth(150)
+
+                    target_layout.addWidget(target_input)
+                    target_layout.addStretch()
+
+                    # Initially hide target input
+                    target_input.setVisible(False)
+
+                    mode_layout.addLayout(target_layout)
+                    options_layout.addLayout(mode_layout)
+
+                    # Connect radio button signals to show/hide target input
+                    def toggle_target_input():
+                        is_target = target_radio.isChecked()
+                        target_input.setVisible(is_target)
+
+                    random_radio.toggled.connect(toggle_target_input)
+                    mutual_radio.toggled.connect(toggle_target_input)
+                    target_radio.toggled.connect(toggle_target_input)
+
+                    # Store references
+                    self.task_options[name] = {
+                        'widget': options_widget,
+                        'random_radio': random_radio,
+                        'mutual_radio': mutual_radio,
+                        'target_radio': target_radio,
+                        'target_input': target_input
+                    }
+
+                elif name == "View video":
+                    # View video options
+                    view_layout = QVBoxLayout()
+                    view_layout.setSpacing(4)
+
+                    # Amount loop input
+                    amount_layout = QHBoxLayout()
+                    amount_label = QLabel("👀 Amount loop:")
+                    amount_label.setFont(QFont("Segoe UI", 9))
+                    amount_label.setStyleSheet("color: #bbdefb;")
+
+                    amount_input = QSpinBox()
+                    amount_input.setRange(1, 50)
+                    amount_input.setValue(5)
+                    amount_input.setStyleSheet("""
+                        QSpinBox {
+                            background-color: #0d0d0d;
+                            color: #2196F3;
+                            border: 1px solid #2196F3;
+                            border-radius: 4px;
+                            padding: 4px;
+                            font-size: 9pt;
+                        }
+                        QSpinBox:focus {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+                    amount_input.setMinimumWidth(80)
+
+                    amount_layout.addWidget(amount_label)
+                    amount_layout.addWidget(amount_input)
+                    amount_layout.addStretch()
+
+                    view_layout.addLayout(amount_layout)
+
+                    # Radio buttons for view modes
+                    radio_layout = QHBoxLayout()
+                    radio_layout.setSpacing(10)
+
+                    random_radio = QRadioButton("Random")
+                    random_radio.setFont(QFont("Segoe UI", 9))
+                    random_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    mutual_radio = QRadioButton("Mutual")
+                    mutual_radio.setFont(QFont("Segoe UI", 9))
+                    mutual_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    # Set random as default
+                    random_radio.setChecked(True)
+
+                    radio_layout.addWidget(random_radio)
+                    radio_layout.addWidget(mutual_radio)
+                    radio_layout.addStretch()
+
+                    view_layout.addLayout(radio_layout)
+                    options_layout.addLayout(view_layout)
+
+                    # Store references
+                    self.task_options[name] = {
+                        'widget': options_widget,
+                        'amount_input': amount_input,
+                        'random_radio': random_radio,
+                        'mutual_radio': mutual_radio
+                    }
+
+                # Connect arrow button to toggle options
+                def make_toggle_func(arrow, opts, task_name):
+                    def toggle():
+                        is_visible = opts.isVisible()
+                        opts.setVisible(not is_visible)
+                        arrow.setText("▲" if not is_visible else "▼")
+                    return toggle
+
+                arrow_btn.clicked.connect(make_toggle_func(arrow_btn, options_widget, name))
+
+                # Create a vertical container for button+options
+                task_item = QWidget()
+                task_item_layout = QVBoxLayout(task_item)
+                task_item_layout.setContentsMargins(0, 0, 0, 0)
+                task_item_layout.setSpacing(4)
+
+                task_item_layout.addWidget(task_container)
+
+                # Add options widget if exists
+                if options_widget:
+                    task_item_layout.addWidget(options_widget)
+
+            else:
+                # No options, just use the button directly
+                task_item = button
+
+            # Add task to grid layout
+            # Row 0: Start Profiles (0,0) | Stop Button (0,1)
+            # Row 1: Close Profiles (1,0) | Delete Profiles (1,1)
+            if i == 0:  # Start Profiles
+                tasks_layout.addWidget(task_item, 0, 0)
+                tasks_layout.addWidget(self.stop_btn, 0, 1)
+            elif i == 1:  # Close Profiles
+                tasks_layout.addWidget(task_item, 1, 0)
+            elif i == 2:  # Delete Profiles
+                tasks_layout.addWidget(task_item, 1, 1)
+
+            self.task_buttons.append({
+                'button': button,
+                'name': name,
+                'icon': icon,
+                'index': idx
+            })
+
+            # Connect button to run task
+            button.clicked.connect(lambda checked, n=name, i=icon, x=idx: self.run_single_task(n, i, x))
+
+        # Remove the stretch since we're using grid layout
+        scroll.setWidget(tasks_container)
+        layout.addWidget(scroll)
+
+        group.setLayout(layout)
+        return group
+
+    def create_behavior_actions_section(self):
+        group = QGroupBox("🎭 Behavior Actions")
         layout = QVBoxLayout()
         layout.setSpacing(8)
         layout.setContentsMargins(6, 6, 6, 6)
+
+        # Mode selection radio buttons
+        mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(10)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+
+        mode_label = QLabel("Mode:")
+        mode_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        mode_label.setStyleSheet("color: #e0e0e0;")
+
+        self.tiktok_radio = QRadioButton("Tiktok")
+        self.tiktok_radio.setFont(QFont("Segoe UI", 9))
+        self.tiktok_radio.setChecked(True)  # Default to Tiktok
+        self.tiktok_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                spacing: 6px;
+            }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                border-radius: 8px;
+                border: 2px solid #2196F3;
+                background-color: #1a1a1a;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #2196F3;
+                border: 2px solid #2196F3;
+            }
+            QRadioButton::indicator:hover {
+                border: 2px solid #42A5F5;
+            }
+        """)
+
+        self.search_radio = QRadioButton("Search")
+        self.search_radio.setFont(QFont("Segoe UI", 9))
+        self.search_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                spacing: 6px;
+            }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                border-radius: 8px;
+                border: 2px solid #2196F3;
+                background-color: #1a1a1a;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #2196F3;
+                border: 2px solid #2196F3;
+            }
+            QRadioButton::indicator:hover {
+                border: 2px solid #42A5F5;
+            }
+        """)
+
+        mode_layout.addWidget(mode_label)
+        mode_layout.addWidget(self.tiktok_radio)
+        mode_layout.addWidget(self.search_radio)
+        mode_layout.addStretch()
+
+        layout.addLayout(mode_layout)
+
+        # Search time input (initially hidden) - giờ và phút
+        self.search_time_layout = QHBoxLayout()
+        self.search_time_layout.setContentsMargins(20, 0, 0, 10)
+
+        search_time_label = QLabel("⏱️ Search time:")
+        search_time_label.setFont(QFont("Segoe UI", 9))
+        search_time_label.setStyleSheet("color: #bbdefb;")
+
+        # Ô input cho giờ
+        self.search_hours_input = QSpinBox()
+        self.search_hours_input.setRange(0, 24)
+        self.search_hours_input.setValue(0)
+        self.search_hours_input.setStyleSheet("""
+            QSpinBox {
+                background-color: #0d0d0d;
+                color: #2196F3;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+                padding: 4px;
+                font-size: 9pt;
+            }
+            QSpinBox:focus {
+                border: 2px solid #42A5F5;
+            }
+        """)
+        self.search_hours_input.setMinimumWidth(60)
+
+        hours_label = QLabel("hours")
+        hours_label.setFont(QFont("Segoe UI", 8))
+        hours_label.setStyleSheet("color: #bbdefb; margin-left: 2px; margin-right: 8px;")
+
+        # Ô input cho phút
+        self.search_minutes_input = QSpinBox()
+        self.search_minutes_input.setRange(1, 59)
+        self.search_minutes_input.setValue(5)
+        self.search_minutes_input.setStyleSheet("""
+            QSpinBox {
+                background-color: #0d0d0d;
+                color: #2196F3;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+                padding: 4px;
+                font-size: 9pt;
+            }
+            QSpinBox:focus {
+                border: 2px solid #42A5F5;
+            }
+        """)
+        self.search_minutes_input.setMinimumWidth(60)
+
+        minutes_label = QLabel("minutes")
+        minutes_label.setFont(QFont("Segoe UI", 8))
+        minutes_label.setStyleSheet("color: #bbdefb; margin-left: 2px;")
+
+        self.search_time_layout.addWidget(search_time_label)
+        self.search_time_layout.addWidget(self.search_hours_input)
+        self.search_time_layout.addWidget(hours_label)
+        self.search_time_layout.addWidget(self.search_minutes_input)
+        self.search_time_layout.addWidget(minutes_label)
+        self.search_time_layout.addStretch()
+
+        # Initially hide search time input
+        for i in range(5):  # 5 widgets: label, hours_input, hours_label, minutes_input, minutes_label
+            self.search_time_layout.itemAt(i).widget().setVisible(False)
+
+        layout.addLayout(self.search_time_layout)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -468,17 +1091,14 @@ class GPMMainWindow(QMainWindow):
 
         # Define tasks with their metadata (name, icon, original_index, has_options)
         tasks = [
-            ("Update Cookies to Excel", "📝", 0, False),
-            ("Create Profiles", "➕", 1, False),
-            ("Import Cookies", "📥", 2, False),
-            ("Start Profiles", "▶️", 3, False),
-            ("Start Profiles (with CDP)", "🎬", 4, False),
-            ("Close Profiles", "⏹️", 5, False),
-            ("Delete Profiles", "🗑️", 6, False),
+            ("Follow", "👥", 7, True),
+            ("View video", "👀", 8, True),
+            ("Like video", "❤️", 9, False),
+            ("Comment", "💬", 10, False),
         ]
 
-        self.task_checkboxes = []
-        self.task_options = {}  # Store option widgets for each task
+        # Note: We don't reset self.task_checkboxes here, we append to it
+        # self.task_options will be updated
 
         for i, (name, icon, idx, has_options) in enumerate(tasks):
             # Create task item container
@@ -540,18 +1160,18 @@ class GPMMainWindow(QMainWindow):
                 arrow_btn.setMaximumHeight(30)
                 arrow_btn.setStyleSheet("""
                     QPushButton {
-                        background-color: #2196F3;
+                        background-color: #555555;
                         color: white;
                         border: none;
                         border-radius: 4px;
-                        font-size: 12px;
+                        font-size: 10px;
                         font-weight: bold;
                     }
                     QPushButton:hover {
-                        background-color: #42A5F5;
+                        background-color: #777777;
                     }
                     QPushButton:pressed {
-                        background-color: #1976D2;
+                        background-color: #555555;
                     }
                 """)
                 arrow_btn.setCursor(Qt.PointingHandCursor)
@@ -565,17 +1185,154 @@ class GPMMainWindow(QMainWindow):
                 options_layout.setSpacing(4)
 
                 # Add specific options based on task
-                if name == "Run Automation":
-                    # Add follower input as example
-                    follower_layout = QHBoxLayout()
-                    follower_label = QLabel("👥 Target Followers:")
-                    follower_label.setFont(QFont("Segoe UI", 9))
-                    follower_label.setStyleSheet("color: #bbdefb;")
+                if name == "Follow":
+                    # Follow mode selection
+                    mode_layout = QVBoxLayout()
+                    mode_layout.setSpacing(4)
 
-                    follower_input = QSpinBox()
-                    follower_input.setRange(1, 10000)
-                    follower_input.setValue(100)
-                    follower_input.setStyleSheet("""
+                    # Radio buttons for follow modes
+                    radio_layout = QHBoxLayout()
+                    radio_layout.setSpacing(10)
+
+                    random_radio = QRadioButton("Random")
+                    random_radio.setFont(QFont("Segoe UI", 9))
+                    random_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    mutual_radio = QRadioButton("Mutual")
+                    mutual_radio.setFont(QFont("Segoe UI", 9))
+                    mutual_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    target_radio = QRadioButton("Target")
+                    target_radio.setFont(QFont("Segoe UI", 9))
+                    target_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    # Set random as default
+                    random_radio.setChecked(True)
+
+                    radio_layout.addWidget(random_radio)
+                    radio_layout.addWidget(mutual_radio)
+                    radio_layout.addWidget(target_radio)
+                    radio_layout.addStretch()
+
+                    mode_layout.addLayout(radio_layout)
+
+                    # Target username input (initially hidden)
+                    target_layout = QHBoxLayout()
+
+                    target_input = QLineEdit()
+                    target_input.setPlaceholderText("Enter @username...")
+                    target_input.setStyleSheet("""
+                        QLineEdit {
+                            background-color: #0d0d0d;
+                            color: #2196F3;
+                            border: 1px solid #2196F3;
+                            border-radius: 4px;
+                            padding: 4px;
+                            font-size: 9pt;
+                            margin-top: 4px;
+                        }
+                    """)
+                    target_input.setMinimumWidth(150)
+
+                    target_layout.addWidget(target_input)
+                    target_layout.addStretch()
+
+                    # Initially hide target input
+                    target_input.setVisible(False)
+
+                    mode_layout.addLayout(target_layout)
+                    options_layout.addLayout(mode_layout)
+
+                    # Connect radio button signals to show/hide target input
+                    def toggle_target_input():
+                        is_target = target_radio.isChecked()
+                        target_input.setVisible(is_target)
+
+                    random_radio.toggled.connect(toggle_target_input)
+                    mutual_radio.toggled.connect(toggle_target_input)
+                    target_radio.toggled.connect(toggle_target_input)
+
+                    # Store references
+                    self.task_options[name] = {
+                        'widget': options_widget,
+                        'random_radio': random_radio,
+                        'mutual_radio': mutual_radio,
+                        'target_radio': target_radio,
+                        'target_input': target_input
+                    }
+
+                elif name == "View video":
+                    # View video options
+                    view_layout = QVBoxLayout()
+                    view_layout.setSpacing(4)
+
+                    # Amount loop input
+                    amount_layout = QHBoxLayout()
+                    amount_label = QLabel("👀 Amount loop:")
+                    amount_label.setFont(QFont("Segoe UI", 9))
+                    amount_label.setStyleSheet("color: #bbdefb;")
+
+                    amount_input = QSpinBox()
+                    amount_input.setRange(1, 50)
+                    amount_input.setValue(5)
+                    amount_input.setStyleSheet("""
                         QSpinBox {
                             background-color: #0d0d0d;
                             color: #2196F3;
@@ -583,24 +1340,85 @@ class GPMMainWindow(QMainWindow):
                             border-radius: 4px;
                             padding: 4px;
                             font-size: 9pt;
-                            font-weight: bold;
                         }
                         QSpinBox:focus {
                             border: 2px solid #42A5F5;
                         }
                     """)
-                    follower_input.setMinimumWidth(100)
+                    amount_input.setMinimumWidth(80)
 
-                    follower_layout.addWidget(follower_label)
-                    follower_layout.addWidget(follower_input)
-                    follower_layout.addStretch()
+                    amount_layout.addWidget(amount_label)
+                    amount_layout.addWidget(amount_input)
+                    amount_layout.addStretch()
 
-                    options_layout.addLayout(follower_layout)
+                    view_layout.addLayout(amount_layout)
 
-                    # Store reference to follower input
+                    # Radio buttons for view modes
+                    radio_layout = QHBoxLayout()
+                    radio_layout.setSpacing(10)
+
+                    random_radio = QRadioButton("Random")
+                    random_radio.setFont(QFont("Segoe UI", 9))
+                    random_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    mutual_radio = QRadioButton("Mutual")
+                    mutual_radio.setFont(QFont("Segoe UI", 9))
+                    mutual_radio.setStyleSheet("""
+                        QRadioButton {
+                            color: #e0e0e0;
+                            spacing: 6px;
+                        }
+                        QRadioButton::indicator {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 8px;
+                            border: 2px solid #2196F3;
+                            background-color: #1a1a1a;
+                        }
+                        QRadioButton::indicator:checked {
+                            background-color: #2196F3;
+                            border: 2px solid #2196F3;
+                        }
+                        QRadioButton::indicator:hover {
+                            border: 2px solid #42A5F5;
+                        }
+                    """)
+
+                    # Set random as default
+                    random_radio.setChecked(True)
+
+                    radio_layout.addWidget(random_radio)
+                    radio_layout.addWidget(mutual_radio)
+                    radio_layout.addStretch()
+
+                    view_layout.addLayout(radio_layout)
+                    options_layout.addLayout(view_layout)
+
+                    # Store references
                     self.task_options[name] = {
                         'widget': options_widget,
-                        'follower_input': follower_input
+                        'amount_input': amount_input,
+                        'random_radio': random_radio,
+                        'mutual_radio': mutual_radio
                     }
 
                 # Connect arrow button to toggle options
@@ -628,29 +1446,81 @@ class GPMMainWindow(QMainWindow):
                 'index': idx
             })
 
+            # Set View video as default checked
+            if name == "View video":
+                checkbox.setChecked(True)
+
         tasks_layout.addStretch()
         scroll.setWidget(tasks_container)
         layout.addWidget(scroll)
 
-        # Buttons layout for Run and Stop
+        # Connect radio button signals to toggle visibility
+        def toggle_mode():
+            is_tiktok = self.tiktok_radio.isChecked()
+            scroll.setVisible(is_tiktok)
+            # Set visibility for all 5 search time widgets
+            for i in range(5):
+                self.search_time_layout.itemAt(i).widget().setVisible(not is_tiktok)
+
+        self.tiktok_radio.toggled.connect(toggle_mode)
+        self.search_radio.toggled.connect(toggle_mode)
+
+        # Initially show Tiktok mode
+        toggle_mode()
+
+        # Buttons layout for Run only (no stop button for behavior actions)
+        # NOTE: Behavior tasks cannot run independently - they require profile startup
+        # They are integrated into the main workflow via the "Run Tasks" button
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(8)
 
-        self.run_btn = ModernButton("Run Selected Tasks", "🚀", "#4CAF50")
-        self.run_btn.setMinimumHeight(35)
-        self.run_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.run_btn.clicked.connect(self.run_selected_tasks)
+        # Note: Behavior tasks cannot run independently - they require profile startup
+        # The run button has been removed. Use the main "Run Tasks" button instead.
+        # self.run_behavior_btn = ModernButton("Run Selected Tasks", "🚀", "#4CAF50")
+        # self.run_behavior_btn.setMinimumHeight(35)
+        # self.run_behavior_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        # self.run_behavior_btn.clicked.connect(self.run_selected_behavior_tasks)
 
-        self.stop_btn = ModernButton("Stop Tasks", "🛑", "#F44336")
-        self.stop_btn.setMinimumHeight(35)
-        self.stop_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.stop_btn.clicked.connect(self.stop_tasks)
-        self.stop_btn.setEnabled(False)  # Disabled by default
-
-        buttons_layout.addWidget(self.run_btn, 2)
-        buttons_layout.addWidget(self.stop_btn, 1)
+        # buttons_layout.addWidget(self.run_behavior_btn)
+        buttons_layout.addStretch()
 
         layout.addLayout(buttons_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def create_cookie_setting_section(self):
+        group = QGroupBox("🍪 Cookie Setting")
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Cookie buttons row
+        cookie_buttons_layout = QHBoxLayout()
+        cookie_buttons_layout.setSpacing(6)
+
+        view_cookie_btn = ModernButton("View files", "📂", "#9C27B0")
+        view_cookie_btn.setMinimumHeight(32)
+        view_cookie_btn.clicked.connect(self.view_cookie_folder)
+
+        upload_cookie_btn = ModernButton("Upload files", "📥", "#FF5722")
+        upload_cookie_btn.setMinimumHeight(32)
+        upload_cookie_btn.clicked.connect(self.import_cookie_file)
+
+        update_list_btn = ModernButton("Update to list", "🔄", "#4CAF50")
+        update_list_btn.setMinimumHeight(32)
+        update_list_btn.clicked.connect(self.update_cookie_list)
+
+        import_profile_btn = ModernButton("Import to profile", "📥", "#FF9800")
+        import_profile_btn.setMinimumHeight(32)
+        import_profile_btn.clicked.connect(self.import_cookies_to_profiles)
+
+        cookie_buttons_layout.addWidget(view_cookie_btn)
+        cookie_buttons_layout.addWidget(upload_cookie_btn)
+        cookie_buttons_layout.addWidget(update_list_btn)
+        cookie_buttons_layout.addWidget(import_profile_btn)
+
+        layout.addLayout(cookie_buttons_layout)
 
         group.setLayout(layout)
         return group
@@ -663,7 +1533,7 @@ class GPMMainWindow(QMainWindow):
                 border: 2px solid #2196F3;
                 border-radius: 8px;
                 margin-top: 10px;
-                padding-top: 10px;
+                padding-top: 8px;
                 font-weight: bold;
                 font-size: 10pt;
             }
@@ -675,7 +1545,7 @@ class GPMMainWindow(QMainWindow):
             }
         """)
         layout = QVBoxLayout()
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
 
         # Terminal container with absolute positioned buttons
@@ -733,7 +1603,7 @@ class GPMMainWindow(QMainWindow):
                 height = parent.height()
 
                 button_spacing = 6
-                margin = 10
+                margin = 20
 
                 save_x = width - self.save_btn.width() - margin
                 save_y = height - self.save_btn.height() - margin
@@ -814,29 +1684,96 @@ class GPMMainWindow(QMainWindow):
 
             os.makedirs(cookies_dir, exist_ok=True)
 
-            # Open file dialog to select cookie file
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Select Cookie File",
+            # Open file dialog to select cookie files (multiple)
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                self, "Select Cookie Files",
                 "",
-                "JSON Files (*.json);;All Files (*.*)"
+                "Text Files (*.txt);;All Files (*.*)"
             )
 
-            if not file_path:
+            if not file_paths:
                 return
 
-            filename = os.path.basename(file_path)
-            dest_path = os.path.join(cookies_dir, filename)
+            imported_count = 0
+            for file_path in file_paths:
+                filename = os.path.basename(file_path)
+                dest_path = os.path.join(cookies_dir, filename)
 
-            shutil.copy2(file_path, dest_path)
+                # Skip if file already exists
+                if os.path.exists(dest_path):
+                    self.log(f"⚠️ Skipped existing file: {filename}")
+                    continue
 
-            success_msg = f"✅ Cookie file imported: {filename}"
+                shutil.copy2(file_path, dest_path)
+                imported_count += 1
+
+            if imported_count > 0:
+                success_msg = f"✅ Imported {imported_count} cookie file(s)"
+                if hasattr(self, 'terminal'):
+                    self.log(success_msg)
+            else:
+                self.log("⚠️ No new files imported (all already exist)")
+
+        except Exception as e:
+            error_msg = f"Failed to import cookie files: {str(e)}"
+            if hasattr(self, 'terminal'):
+                self.log(f"❌ {error_msg}")
+
+    @Slot()
+    def update_cookie_list(self):
+        try:
+            import os
+            from excel import update_excel_column_a_with_cookie_files
+
+            cookies_dir = config.COOKIES_DIR
+            excel_path = config.EXCEL_PATH
+
+            if not os.path.exists(cookies_dir):
+                error_msg = f"Cookie directory not found: {cookies_dir}"
+                if hasattr(self, 'terminal'):
+                    self.log(f"❌ {error_msg}")
+                return
+
+            if not os.path.exists(excel_path):
+                error_msg = f"Excel file not found: {excel_path}"
+                if hasattr(self, 'terminal'):
+                    self.log(f"❌ {error_msg}")
+                return
+
+            count = update_excel_column_a_with_cookie_files(
+                excel_path=excel_path,
+                cookies_folder=cookies_dir
+            )
+
+            success_msg = f"✅ Updated Excel with {count} cookie files"
             if hasattr(self, 'terminal'):
                 self.log(success_msg)
 
         except Exception as e:
-            error_msg = f"Failed to import cookie file: {str(e)}"
+            error_msg = f"Failed to update cookie list: {str(e)}"
             if hasattr(self, 'terminal'):
-                self.log(f"❌ {error_msg}")    @Slot()
+                self.log(f"❌ {error_msg}")
+
+    def import_cookies_to_profiles(self):
+        try:
+            actions = {
+                "create": False,
+                "start": True,
+                "import": True,
+                "close": False,
+                "delete": False,
+                "pw": False,
+                "handle_cookies": False
+            }
+
+            self.run_tasks_with_actions(actions, "Import Cookies to Profiles")
+
+        except Exception as e:
+            error_msg = f"Failed to import cookies to profiles: {str(e)}"
+            if hasattr(self, 'terminal'):
+                self.log(f"❌ {error_msg}")
+
+    @Slot()
     def load_excel_data(self):
         try:
             import os
@@ -851,7 +1788,7 @@ class GPMMainWindow(QMainWindow):
             rows = read_excel()
 
             if not rows:
-                self.proxies_text.setPlainText("⚠️ No data found in Excel file")
+                self.proxies_text.setPlainText("")
                 if hasattr(self, 'terminal'):
                     self.log("⚠️ No data found in Excel file")
                 return
@@ -927,35 +1864,49 @@ class GPMMainWindow(QMainWindow):
             lines = text_content.strip().split('\n')
 
             # Parse proxies from text (format: "1. proxy_address")
-            proxies_dict = {}
+            proxies_list = []
             for line in lines:
                 line = line.strip()
-                if line and '. ' in line:
-                    try:
-                        index_str, proxy = line.split('. ', 1)
-                        index = int(index_str)
-                        proxies_dict[index] = proxy.strip()
-                    except ValueError:
-                        continue
+                if line:
+                    # More flexible parsing: split on first '.' and take the rest as proxy
+                    if '.' in line:
+                        parts = line.split('.', 1)
+                        if len(parts) == 2:
+                            index_str = parts[0].strip()
+                            proxy = parts[1].strip()
+                            try:
+                                index = int(index_str)
+                                proxies_list.append(proxy)
+                            except ValueError:
+                                # If not a number, treat the whole line as proxy
+                                proxies_list.append(line)
+                        else:
+                            proxies_list.append(line)
+                    else:
+                        # If no number, treat the whole line as proxy
+                        proxies_list.append(line)
 
-            if not proxies_dict:
-                self.log("⚠️ No valid proxy data to save. Format: 1. proxy_address")
-                return
-
+            # Allow saving empty list (clears all proxies)
             wb = load_workbook(excel_path)
             ws = wb.active
 
+            # Clear all proxy cells from row 2 onwards
+            for row in range(2, ws.max_row + 1):
+                ws.cell(row=row, column=2).value = None
+
+            # Write proxies in order from row 2
             updated_count = 0
-            for row_num, proxy in proxies_dict.items():
-                excel_row = row_num + 1  # +1 because Excel rows start at 1, +1 for header
-                if excel_row <= ws.max_row:
-                    ws.cell(excel_row, 2).value = proxy  # Column B (proxy)
-                    updated_count += 1
+            for i, proxy in enumerate(proxies_list, start=2):  # start=2 for row 2
+                ws.cell(row=i, column=2).value = proxy
+                updated_count += 1
 
             wb.save(excel_path)
             wb.close()
 
-            success_msg = f"✅ Saved {updated_count} proxies to Excel!"
+            if proxies_list:
+                success_msg = f"✅ Saved {updated_count} proxies to Excel!"
+            else:
+                success_msg = "✅ Cleared all proxies from Excel!"
             if hasattr(self, 'terminal'):
                 self.log(success_msg)
 
@@ -980,33 +1931,19 @@ class GPMMainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.terminal.append(f"[{timestamp}] {message}")
 
-    def run_selected_tasks(self):
-        """Run all selected tasks - synchronized with CLI logic"""
+    def run_single_task(self, task_name, task_icon, task_index):
         if self.current_worker and self.current_worker.isRunning():
-            self.log("⚠️ Another task is running. Please wait...")
-            return
-
-        # Collect selected tasks
-        selected_tasks = []
-        for task_info in self.task_checkboxes:
-            if task_info['checkbox'].isChecked():
-                selected_tasks.append(task_info)
-
-        if not selected_tasks:
-            self.log("⚠️ No tasks selected. Please select at least one task.")
+            self.log(f"⚠️ Another task is running. Please wait...")
             return
 
         # Reset stop flag
         self.stop_requested = False
 
-        # Update button states
-        self.run_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+        # Update stop button state (if it exists)
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.setEnabled(True)
 
-        # Sort by original index to maintain order
-        selected_tasks.sort(key=lambda x: x['index'])
-
-        # Build actions dictionary based on selected tasks
+        # Build actions dictionary for this single task
         actions = {
             "handle_cookies": False,
             "create": False,
@@ -1015,38 +1952,156 @@ class GPMMainWindow(QMainWindow):
             "import": False,
             "close": False,
             "delete": False,
+            "follow": False,
+            "like_video": False,
+            "comment": False,
+            "view_video": False,
         }
 
-        # Map task names to actions
-        for task_info in selected_tasks:
-            name = task_info['name']
-            if name == "Update Cookies to Excel":
-                actions["handle_cookies"] = True
-            elif name == "Create Profiles":
-                actions["create"] = True
-            elif name == "Import Cookies":
-                actions["import"] = True
-                actions["start"] = True
-            elif name == "Start Profiles":
-                actions["start"] = True
-            elif name == "Start Profiles (with CDP)":
-                actions["start"] = True
+        # Map task name to actions
+        if task_name == "Start Profiles":
+            actions["start"] = True
+            # Check the "Run with CDP" checkbox to determine mode
+            if hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked():
                 actions["pw"] = True
-            elif name == "Close Profiles":
-                actions["close"] = True
-            elif name == "Delete Profiles":
-                actions["delete"] = True
+        elif task_name == "Close Profiles":
+            actions["close"] = True
+        elif task_name == "Delete Profiles":
+            actions["delete"] = True
+        elif task_name == "Follow":
+            actions["follow"] = True
+            actions["start"] = True
+        elif task_name == "Like video":
+            actions["like_video"] = True
+            actions["start"] = True
+        elif task_name == "Comment":
+            actions["comment"] = True
+            actions["start"] = True
+        elif task_name == "View video":
+            actions["view_video"] = True
+            actions["start"] = True
 
-        # Log selected tasks
-        task_names = [f"{task['icon']} {task['name']}" for task in selected_tasks]
+        # Log the task being run
         self.log(f"\n{'='*70}")
-        self.log(f"📋 Running tasks ({len(selected_tasks)}):")
-        for i, name in enumerate(task_names, 1):
-            self.log(f"  {i}. {name}")
+        self.log(f"🚀 Running task: {task_icon} {task_name}")
         self.log(f"{'='*70}\n")
 
-        # Run tasks with CLI logic
+        # Run the task
         self.run_tasks_with_actions(actions)
+
+    def run_single_task(self, task_name, task_icon, task_index):
+        """Run a single automation task immediately"""
+        if self.current_worker and self.current_worker.isRunning():
+            self.log(f"⚠️ Another task is running. Please wait...")
+            return
+
+        # Reset stop flag
+        self.stop_requested = False
+
+        # Update stop button state if it exists
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.setEnabled(True)
+
+        # Disable all task buttons except stop
+        for task_item in self.task_buttons:
+            task_item['button'].setEnabled(False)
+
+        # Build actions dictionary for this single task
+        actions = {
+            "handle_cookies": False,
+            "create": False,
+            "start": False,
+            "pw": False,
+            "import": False,
+            "close": False,
+            "delete": False,
+            "follow": False,
+            "like_video": False,
+            "comment": False,
+            "view_video": False,
+        }
+
+        # Map task name to actions
+        if task_name == "Start Profiles":
+            actions["start"] = True
+            # Check the "Run with CDP" checkbox to determine mode
+            if hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked():
+                actions["pw"] = True
+        elif task_name == "Close Profiles":
+            actions["close"] = True
+        elif task_name == "Delete Profiles":
+            actions["delete"] = True
+
+        # If starting profiles, also include selected behavior actions
+        # LƯU Ý: Behavior actions CHỈ hoạt động với CDP mode
+        if task_name == "Start Profiles":
+            # Determine if we're in CDP mode based on checkbox
+            is_cdp_mode = hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked()
+
+            # Check behavior mode (Tiktok or Search)
+            behavior_mode = "tiktok" if self.tiktok_radio.isChecked() else "search"
+            actions["behavior_mode"] = behavior_mode
+
+            if behavior_mode == "search":
+                # For search mode, get search time (hours * 60 + minutes)
+                hours = self.search_hours_input.value()
+                minutes = self.search_minutes_input.value()
+                total_minutes = hours * 60 + minutes
+                # Ensure minimum 1 minute
+                actions["search_time"] = max(1, total_minutes)
+            else:
+                # For tiktok mode, collect behavior actions
+                for checkbox_item in self.task_checkboxes:
+                    if checkbox_item['checkbox'].isChecked():
+                        name = checkbox_item['name']
+                        if name == "Follow":
+                            actions["follow"] = True
+                            # Lấy follow mode và target username từ GUI
+                            if "Follow" in self.task_options:
+                                follow_opts = self.task_options["Follow"]
+                                if follow_opts['random_radio'].isChecked():
+                                    actions["follow_mode"] = "random"
+                                elif follow_opts['mutual_radio'].isChecked():
+                                    actions["follow_mode"] = "mutual"
+                                elif follow_opts['target_radio'].isChecked():
+                                    actions["follow_mode"] = "target"
+                                    target_text = follow_opts['target_input'].text().strip()
+                                    if target_text:
+                                        actions["follow_target"] = target_text
+                        elif name == "View video":
+                            actions["view_video"] = True
+                            # Lấy view amount từ GUI nếu có
+                            if "View video" in self.task_options:
+                                view_opts = self.task_options["View video"]
+                                actions["view_amount"] = view_opts['amount_input'].value()
+                        elif name == "Like video":
+                            actions["like_video"] = True
+                        elif name == "Comment":
+                            actions["comment"] = True
+
+            # CHỈ enable pw mode nếu:
+            # 1. Đang ở CDP mode (checkbox checked)
+            # 2. VÀ có ít nhất một behavior action được chọn (tiktok mode) HOẶC search mode được chọn
+            if is_cdp_mode:
+                has_behavior_actions = actions["follow"] or actions["like_video"] or actions["comment"] or actions["view_video"]
+                if has_behavior_actions or behavior_mode == "search":
+                    actions["pw"] = True
+            else:
+                # Nếu ở launch mode mà có behavior actions được chọn, cảnh báo user
+                has_behavior_actions = actions["follow"] or actions["like_video"] or actions["comment"] or actions["view_video"]
+                if has_behavior_actions or behavior_mode == "search":
+                    self.log("⚠️ WARNING: Behavior actions và Search mode chỉ hoạt động với CDP mode!")
+                    self.log("⚠️ Vui lòng bật checkbox 'Run with CDP' để sử dụng các tính năng này.")
+                    self.log("⚠️ Hiện tại chỉ start profiles mà không chạy behavior actions hoặc search.\n")
+
+        # Log the task being run
+        self.log(f"\n{'='*70}")
+        self.log(f"🚀 Running task: {task_icon} {task_name}")
+        self.log(f"{'='*70}\n")
+
+        # Run the task
+        self.run_tasks_with_actions(actions, f"{task_icon} {task_name}")
+
 
     def stop_tasks(self):
         """Stop currently running tasks"""
@@ -1069,10 +2124,13 @@ class GPMMainWindow(QMainWindow):
                 self.current_worker.wait()
 
         # Reset button states
-        self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
-    def run_tasks_with_actions(self, actions):
+        # Re-enable all task buttons
+        for task_item in self.task_buttons:
+            task_item['button'].setEnabled(True)
+
+    def run_tasks_with_actions(self, actions, task_name="Tasks"):
         """Run tasks using CLI logic with ThreadPoolExecutor"""
         def run():
             from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1143,26 +2201,27 @@ class GPMMainWindow(QMainWindow):
             else:
                 safe_print("⏹️ Tasks stopped by user")
 
-        # Run in worker thread
-        self.current_worker = TaskWorker("Automation Tasks", run)
+        self.current_worker = TaskWorker(task_name, run)
         self.current_worker.log_signal.connect(self.log)
         self.current_worker.finished_signal.connect(self.on_tasks_finished)
         self.current_worker.start()
 
     @Slot(bool, str)
     def on_tasks_finished(self, success, message):
-        """Handle completion of all tasks"""
-        # Reset button states
-        self.run_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.setEnabled(False)
+
+        # Re-enable all task buttons
+        for task_item in self.task_buttons:
+            task_item['button'].setEnabled(True)
 
         if success:
-            self.log("\n✅ All tasks completed successfully!")
+            self.log("\n✅ Task completed successfully!")
         else:
             if "stopped" in message.lower():
                 self.log(f"\n⏹️ {message}")
             else:
-                self.log(f"\n❌ Tasks failed: {message}")
+                self.log(f"\n❌ Task failed: {message}")
 
     def save_log(self):
         file_path, _ = QFileDialog.getSaveFileName(
@@ -1174,6 +2233,32 @@ class GPMMainWindow(QMainWindow):
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(self.terminal.toPlainText())
             self.log(f"💾 Log saved: {file_path}")
+
+    def create_profiles(self):
+        if self.current_worker and self.current_worker.isRunning():
+            self.log("⚠️ Another task is running. Please wait...")
+            return
+
+        self.stop_requested = False
+
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.setEnabled(True)
+
+        actions = {
+            "handle_cookies": False,
+            "create": True,
+            "start": False,
+            "pw": False,
+            "import": False,
+            "close": False,
+            "delete": False,
+        }
+
+        self.log(f"\n{'='*70}")
+        self.log("📋 Running task: ➕ Create Profiles")
+        self.log(f"{'='*70}\n")
+
+        self.run_tasks_with_actions(actions, "➕ Create Profiles")
 
 def run_gui():
     app = QApplication(sys.argv)

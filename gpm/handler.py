@@ -11,6 +11,7 @@ from services import (
     close_profile,
     delete_profile,
     remember_debug_addr,
+    get_debug_addr,
 )
 
 def process_row(name, cookie, proxy_raw, index, actions, total_profiles=None):
@@ -45,9 +46,15 @@ def process_row(name, cookie, proxy_raw, index, actions, total_profiles=None):
             pid = get_profile_id(profile_name)
 
         if actions["start"] or actions["import"] or actions["pw"]:
-            addr = start_profile(pid, index, total_profiles)
-            safe_print(f"✅ Started {profile_name} -> {addr}")
-            remember_debug_addr(profile_name, addr)
+            # Check if profile is already started
+            existing_addr = get_debug_addr(profile_name)
+            if existing_addr:
+                addr = existing_addr
+                safe_print(f"✅ Reusing existing connection for {profile_name} -> {addr}")
+            else:
+                addr = start_profile(pid, index, total_profiles)
+                safe_print(f"✅ Started {profile_name} -> {addr}")
+                remember_debug_addr(profile_name, addr)
 
         if actions["import"] or actions["pw"]:
             if addr:

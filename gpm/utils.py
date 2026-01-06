@@ -102,9 +102,29 @@ def list_filepaths(folder: str, base: str = ".") -> List[str]:
     files.sort(key=lambda p: os.path.basename(p).lower())
     return files
 
+import unicodedata
+
+def normalize_ext(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s)
+    s = s.casefold()
+    s = s.replace("ı", "i")
+    return s
+
+def hardcore_normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s)
+    s = s.casefold()
+    s = s.replace("ı", "i")
+
+    s = "".join(
+        c for c in s
+        if unicodedata.category(c)[0] != "C"
+    )
+
+    return s
+
 def detect_username_from_cookie_filename(text: str) -> str:
     username = re.search(r'\[([^\]]+)\]\.txt$', text)
-    return username.group(1) if username else "Unknown"
+    return normalize_ext(username.group(1)) if username else "Unknown"
 
 def copy_folder(source: str, destination: str):
     os.makedirs(destination, exist_ok=True)

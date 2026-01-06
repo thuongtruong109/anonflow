@@ -20,8 +20,6 @@ from actions.common import (
 )
 from comment import TextRandomizer
 
-TARGET_PIVOT = "https://www.tiktok.com/@moises2743"
-
 # Global để lưu URL video hiện tại
 _current_video_url = None
 
@@ -276,24 +274,47 @@ async def close_profile_share_modal_if_any(page: Page) -> bool:
 async def click_author_avatar_if_any(page: Page) -> bool:
     return await safe_click(page, 'a[data-e2e="video-author-avatar"]', timeout_ms=3500)
 
-async def visit_target_pivot_and_follow(page: Page, username: str = "unknown", max_retries: int = 3) -> bool:
+async def visit_target_pivot_and_follow(
+    page: Page,
+    username: str = "unknown",
+    target_username: str = None,
+    max_retries: int = 3
+) -> bool:
     """
-    Vào TARGET_PIVOT profile và click nút follow.
+    Vào target profile và click nút follow.
 
     Args:
         page: Playwright Page object
         username: Tên người dùng thực hiện action (người follow)
+        target_username: Username để follow (bắt buộc)
         max_retries: Số lần retry nếu fail
 
     Returns:
         True nếu follow thành công, False nếu không
     """
-    target_username = TARGET_PIVOT.split("/@")[-1] if "/@" in TARGET_PIVOT else "unknown"
+    # Kiểm tra target_username
+    if not target_username:
+        print(f"⚠️ [{username}] No target username provided")
+        return False
+
+    # Xử lý target_username (có thể có @ hoặc không)
+    target_user = target_username.lstrip("@")
+    target_url = f"https://www.tiktok.com/@{target_user}"
+
+    print(f"🎯 [{username}] Attempting to follow: {target_user}")
 
     for attempt in range(max_retries):
         try:
-            # Navigate đến TARGET_PIVOT profile - để tự load, không set timeout cứng
-            await page.goto(TARGET_PIVOT, wait_until="domcontentloaded")
+            # Navigate đến target profile với timeout rõ ràng
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as goto_err:
+                print(f"⚠️ [{username}] Failed to navigate to {target_user} (attempt {attempt+1}/{max_retries}): {goto_err}")
+                if attempt < max_retries - 1:
+                    await sleep_ms(2000, 3000)
+                    continue
+                return False
+
             await sleep_ms(2000, 4000)
 
             # Close modal nếu có
@@ -301,13 +322,13 @@ async def visit_target_pivot_and_follow(page: Page, username: str = "unknown", m
             await close_profile_share_modal_if_any(page)
             await sleep_ms(800, 1500)
 
-            # Tìm nút follow - chờ đủ lâu để nó load
+            # Tìm nút follow - chờ tối đa 30 giây
             follow_button_selector = 'button[data-e2e="follow-button"]'
 
-            # Chờ button xuất hiện, không set timeout cứng
             try:
                 await page.wait_for_selector(follow_button_selector, state="visible", timeout=30000)
-            except Exception:
+            except Exception as wait_err:
+                print(f"⚠️ [{username}] Follow button not found (attempt {attempt+1}/{max_retries}): {wait_err}")
                 if attempt < max_retries - 1:
                     await sleep_ms(2000, 3000)
                     continue
@@ -338,24 +359,57 @@ async def visit_target_pivot_and_follow(page: Page, username: str = "unknown", m
 
                 # Click nút follow với force click để chắc chắn
                 try:
-                    await follow_btn.click(force=True, timeout=10000)
-                    await sleep_ms(1500, 2500)
-
-                    # Verify click thành công bằng cách check text đã đổi chưa
+                    # Lấy text trước khi click
+                    text_before = ""
                     try:
-                        new_text = await follow_btn.inner_text(timeout=5000)
-                        if new_text and ("following" in new_text.lower() or "đang" in new_text.lower()):
-                            # Follow thành công! Log vào follow.log
-                            _log_action("follow.log", username, TARGET_PIVOT, f"Successfully followed {target_username}")
-                            return True
-                    except Exception:
+                        text_before = (await follow_btn.inner_text(timeout=3000)).lower()
+                    except:
                         pass
 
-                    # Nếu không verify được bằng text, coi như thành công và log
-                    _log_action("follow.log", username, TARGET_PIVOT, f"Clicked follow button for {target_username}")
-                    return True
+                    print(f"👥 [{username}] Clicking follow button for {target_user}...")
+                    await follow_btn.click(force=True, timeout=10000)
+
+                    # Đợi lâu hơn để TikTok xử lý request (3-5s thay vì 1.5-2.5s)
+                    await sleep_ms(3000, 5000)
+
+                    # Verify click thành công bằng cách check text đã đổi chưa
+                    follow_success = False
+                    try:
+                        new_text = (await follow_btn.inner_text(timeout=5000)).lower()
+
+                        # Nếu text đổi từ "follow" sang "following"
+                        if "follow" in text_before and "following" in new_text:
+                            follow_success = True
+                        # Hoặc nếu text hiện tại là "following"
+                        elif "following" in new_text or "đang" in new_text:
+                            follow_success = True
+
+                        print(f"✅ [{username}] Follow verification: text_before='{text_before}', new_text='{new_text}', success={follow_success}")
+                    except Exception as verify_err:
+                        print(f"⚠️ [{username}] Cannot verify follow text: {verify_err}")
+                        # Không verify được, đợi thêm rồi check lại
+                        await sleep_ms(2000, 3000)
+                        try:
+                            final_text = (await follow_btn.inner_text(timeout=5000)).lower()
+                            if "following" in final_text or "đang" in final_text:
+                                follow_success = True
+                                print(f"✅ [{username}] Follow verification (retry): final_text='{final_text}', success={follow_success}")
+                        except:
+                            pass
+
+                    if follow_success:
+                        # Follow thành công! Log vào follow.log
+                        _log_action("follow.log", username, target_url, f"Successfully followed {target_user}")
+                        print(f"🎉 [{username}] Successfully followed {target_user}")
+                        return True
+                    else:
+                        # Click rồi nhưng không chắc có thành công
+                        _log_action("follow.log", username, target_url, f"Clicked follow button for {target_user} (unverified)")
+                        print(f"⚠️ [{username}] Clicked follow but cannot verify success")
+                        return True  # Vẫn return True vì đã click rồi
 
                 except Exception as click_err:
+                    print(f"❌ [{username}] Follow click error: {click_err}")
                     if attempt < max_retries - 1:
                         await sleep_ms(2000, 3000)
                         continue
@@ -654,13 +708,10 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
 
     # Đợi page load sau khi click vào video
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=30000)
+        await page.wait_for_load_state("domcontentloaded", timeout=60000)
         await sleep_ms(1000, 2000)
     except Exception:
         pass
-
-    # Track và log video đang xem trong profile
-    await track_and_log_video(page, username=username)
 
     await watch_like_human(page, min_ms=7000, max_ms=22000, mouse_jitter=True)
     await sleep_ms(1200, 5200)
@@ -679,13 +730,6 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
         if comment_success:
             await sleep_ms(1500, 3000)
 
-    # Thêm hành vi visit TARGET_PIVOT và follow - CHỈ KHI ĐÃ LOGIN
-    if is_logged_in and chance(0.12):  # 12% cơ hội follow TARGET_PIVOT từ profile
-        await sleep_ms(1000, 2500)
-        follow_success = await visit_target_pivot_and_follow(page, username=username)
-        if follow_success:
-            await sleep_ms(1500, 3000)
-
     try:
         await page.go_back()
     except Exception:
@@ -700,6 +744,14 @@ async def run_tiktok_flow(
     will_view_min: int = 5,
     will_view_max: int = 15,
     username: str = "foryou",
+    follow: bool = False,
+    like_video: bool = False,
+    comment: bool = False,
+    view_video: bool = True,
+    view_amount: int = None,
+    follow_mode: str = "random",
+    follow_target: str = None,
+    all_usernames: list = None,
 ):
     """
     More natural feed browsing:
@@ -707,108 +759,199 @@ async def run_tiktok_flow(
     - small scroll adjustments
     - occasional comments open/close
     - occasional profile visit
-    - track video URL và log vào like.log
 
     Args:
         username: Tên profile/user thực hiện actions (để log)
+        follow_mode: Mode follow - "random", "mutual", hoặc "target"
+        follow_target: Username để follow (nếu follow_mode="target")
+        all_usernames: Danh sách tất cả usernames (nếu follow_mode="mutual")
     """
 
-    # 1. Vào profile page để check login status
-    await page.goto(f"https://www.tiktok.com/@{username}?lang=en", wait_until="load")
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    # DEBUG LOG
+    print(f"🎯 [{username}] run_tiktok_flow CALLED with: follow={follow}, like={like_video}, comment={comment}, view={view_video}")
 
     # ✅ start watcher (background)
     watcher = start_popup_watcher(page)
 
     try:
+        # 1. Navigate trực tiếp đến /foryou thay vì profile page (nhanh hơn)
+        print(f"🌐 [{username}] Navigating to For You page...")
+        try:
+            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=90000)
+            try:
+                # Chỉ đợi networkidle 30 giây thôi, nếu quá lâu thì bỏ qua
+                await asyncio.wait_for(
+                    page.wait_for_load_state("networkidle"),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                print(f"⚠️ [{username}] Network idle timeout - continuing anyway")
+            await sleep_ms(2000, 4000)
+            print(f"✅ [{username}] For You page loaded")
+        except Exception as nav_error:
+            print(f"⚠️ [{username}] Navigation failed: {nav_error}")
+            # Nếu navigate fail, thử reload page hiện tại
+            try:
+                await page.reload(wait_until="load", timeout=60000)
+                await sleep_ms(2000, 3000)
+            except Exception as reload_error:
+                print(f"❌ [{username}] Reload also failed: {reload_error}")
+                # Nếu reload cũng fail thì return luôn, không làm gì nữa
+                return
+
         await close_cta_modal_if_any(page)
 
-        # 2. Kiểm tra login status
+        # 2. Kiểm tra login status từ page hiện tại
         is_logged_in = await check_login_status(page, username=username)
+        print(f"🔐 [{username}] Login status: {is_logged_in}")
 
         # 3. Nếu chưa login, dừng ngay, không làm gì cả
         if not is_logged_in:
+            print(f"❌ [{username}] NOT LOGGED IN - stopping all actions")
             _log_action("login.log", username, page.url, "Not logged in - stopping all actions")
             return
 
-        # 4. Nếu đã login, chuyển về /foryou để thực hiện behaviors
-        try:
-            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-            await page.wait_for_load_state("networkidle", timeout=30000)
-            await sleep_ms(2000, 4000)
-            await close_cta_modal_if_any(page)
-        except Exception:
-            pass
+        print(f"✅ [{username}] LOGGED IN - proceeding with behavior actions")
 
-        will_view_amount = randi(will_view_min, will_view_max)
+        # 4. Đảm bảo đang ở /foryou (đã navigate ở trên rồi, không cần nữa)
+        # Nếu chưa ở /foryou, navigate đến đó
+        if "/foryou" not in page.url.lower():
+            try:
+                print(f"🌐 [{username}] Not on For You page, navigating...")
+                await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=90000)
+                try:
+                    await asyncio.wait_for(
+                        page.wait_for_load_state("networkidle"),
+                        timeout=30.0
+                    )
+                except asyncio.TimeoutError:
+                    print(f"⚠️ [{username}] Network idle timeout during second navigation - continuing")
+                await sleep_ms(2000, 4000)
+                await close_cta_modal_if_any(page)
+            except Exception as e:
+                print(f"⚠️ [{username}] Navigation to For You failed: {e}")
+                # Nếu navigate fail thì return, không tiếp tục
+                return
 
-        for _ in range(will_view_amount):
-            # 0) Track và log video đang xem
-            await track_and_log_video(page, username=username)
+        will_view_amount = view_amount if view_amount is not None else randi(will_view_min, will_view_max)
 
-            # 1) watch current video naturally
-            await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
+        print(f"📹 [{username}] view_video={view_video}, will_view_amount={will_view_amount}")
 
-            # 1.5) sometimes like the video (tỉ lệ cao) - CHỈ KHI ĐÃ LOGIN
-            if is_logged_in and chance(0.35):  # 35% cơ hội like video
-                await sleep_ms(600, 1400)
-                like_success = await random_like_video(page, username=username)
-                if like_success:
-                    await sleep_ms(800, 1800)
+        if view_video:
+            print(f"🎬 [{username}] Starting view video loop for {will_view_amount} videos")
+            for i in range(will_view_amount):
+                print(f"👀 [{username}] Watching video {i+1}/{will_view_amount}")
 
-            # 2) small scroll nudges (not big jumps)
-            if chance(0.55):
-                await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
-            if chance(0.10):
-                await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
+                # 1) watch current video naturally
+                await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
 
-            # 3) sometimes open comments briefly
-            if chance(0.22):
-                await sleep_ms(900, 2400)
-                await safe_click_xpath(page, "//*[@data-e2e='comment-icon']", timeout_ms=6000)
+                # 1.5) like the video if enabled - CHỈ KHI ĐÃ LOGIN
+                if is_logged_in and like_video:
+                    await sleep_ms(600, 1400)
+                    like_success = await random_like_video(page, username=username)
+                    if like_success:
+                        await sleep_ms(800, 1800)
 
-                # "read" comments
-                await sleep_ms(1800, 6000)
+                # 2) small scroll nudges (not big jumps)
+                if chance(0.55):
+                    await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
+                if chance(0.10):
+                    await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
 
-                # small comment scroll
-                if chance(0.35):
-                    await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
+                # 3) open comments if commenting is enabled or sometimes randomly
+                should_open_comments = comment or chance(0.22)
+                if should_open_comments:
+                    await sleep_ms(900, 2400)
+                    await safe_click_xpath(page, "//*[@data-e2e='comment-icon']", timeout_ms=6000)
 
-                # Thêm hành vi comment ngẫu nhiên vào video feed - CHỈ KHI ĐÃ LOGIN
-                if is_logged_in and chance(0.40):  # 40% cơ hội comment khi đã mở comment section
-                    await sleep_ms(800, 1800)
-                    comment_success = await random_comment_on_video(page, username=username)
-                    if comment_success:
-                        await sleep_ms(1500, 3000)
+                    # "read" comments
+                    await sleep_ms(1800, 6000)
 
-                # detect possible bridge navigation
-                has_bridge = False
-                last = page.url
-                end_time = asyncio.get_event_loop().time() + 3.0
-                while asyncio.get_event_loop().time() < end_time:
-                    cur = page.url
-                    if cur != last:
-                        last = cur
-                        has_bridge = is_bridge_link(cur)
-                    await asyncio.sleep(0.3)
+                    # small comment scroll
+                    if chance(0.35):
+                        await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
 
-                if not has_bridge:
-                    await close_exit_if_any(page)
+                    # Comment if enabled - CHỈ KHI ĐÃ LOGIN
+                    if is_logged_in and comment:
+                        await sleep_ms(800, 1800)
+                        comment_success = await random_comment_on_video(page, username=username)
+                        if comment_success:
+                            await sleep_ms(1500, 3000)
 
-            # 3.5) sometimes visit TARGET_PIVOT and follow - CHỈ KHI ĐÃ LOGIN
-            if is_logged_in and chance(0.8):  # 30% cơ hội follow TARGET_PIVOT
-                await sleep_ms(1000, 2500)
-                follow_success = await visit_target_pivot_and_follow(page, username=username)
-                if follow_success:
-                    await sleep_ms(1500, 3000)
-                    # Sau khi follow, quay về /foryou
-                    try:
-                        await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
-                        await page.wait_for_load_state("networkidle", timeout=30000)
-                        await sleep_ms(2000, 4000)
-                        await close_cta_modal_if_any(page)
-                    except Exception:
-                        pass
+                    # detect possible bridge navigation
+                    has_bridge = False
+                    last = page.url
+                    end_time = asyncio.get_event_loop().time() + 3.0
+                    while asyncio.get_event_loop().time() < end_time:
+                        cur = page.url
+                        if cur != last:
+                            last = cur
+                            has_bridge = is_bridge_link(cur)
+                        await asyncio.sleep(0.3)
+
+                    if not has_bridge:
+                        await close_exit_if_any(page)
+
+                # 3.5) Follow based on mode - CHỈ KHI ĐÃ LOGIN
+                # Tăng tỉ lệ follow lên 50%
+                if is_logged_in and follow and chance(0.50):
+                    await sleep_ms(1000, 2500)
+
+                    target_to_follow = None
+
+                    # Xác định target dựa trên follow mode
+                    if follow_mode == "random":
+                        # Random mode: Follow ngẫu nhiên từ video hiện tại (author)
+                        # Lấy username từ video đang xem
+                        try:
+                            author_link = page.locator('a[data-e2e="video-author-uniqueid"]').first
+                            if await author_link.count() > 0:
+                                author_href = await author_link.get_attribute("href")
+                                if author_href and "/@" in author_href:
+                                    target_to_follow = author_href.split("/@")[-1].split("/")[0].split("?")[0]
+                                    print(f"🎲 [{username}] Random mode: Following author {target_to_follow}")
+                        except Exception as e:
+                            print(f"⚠️ [{username}] Cannot get random author: {e}")
+
+                    elif follow_mode == "mutual":
+                        # Mutual mode: Follow ngẫu nhiên một profile khác trong list (không phải chính mình)
+                        if all_usernames and len(all_usernames) > 1:
+                            other_users = [u for u in all_usernames if u != username]
+                            if other_users:
+                                target_to_follow = random.choice(other_users)
+                                print(f"🔄 [{username}] Mutual mode: Following {target_to_follow}")
+
+                    elif follow_mode == "target":
+                        # Target mode: Follow user được chỉ định từ input
+                        if follow_target:
+                            target_to_follow = follow_target
+                            print(f"🎯 [{username}] Target mode: Following {target_to_follow}")
+
+                    # Thực hiện follow nếu có target
+                    if target_to_follow:
+                        follow_success = await visit_target_pivot_and_follow(
+                            page,
+                            username=username,
+                            target_username=target_to_follow
+                        )
+                        if follow_success:
+                            await sleep_ms(1500, 3000)
+                            # Sau khi follow, quay về /foryou
+                            try:
+                                await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=60000)
+                                try:
+                                    await asyncio.wait_for(
+                                        page.wait_for_load_state("networkidle"),
+                                        timeout=20.0
+                                    )
+                                except asyncio.TimeoutError:
+                                    print(f"⚠️ [{username}] Network idle timeout after follow - continuing")
+                                await sleep_ms(2000, 4000)
+                                await close_cta_modal_if_any(page)
+                            except Exception as nav_err:
+                                print(f"⚠️ [{username}] Failed to return to For You after follow: {nav_err}")
+                    else:
+                        print(f"⚠️ [{username}] No target to follow in mode: {follow_mode}")
 
             # 4) sometimes visit author profile and interact
             if chance(0.18):
@@ -817,7 +960,7 @@ async def run_tiktok_flow(
                 if ok:
                     # Đợi page load sau khi click vào avatar
                     try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                        await page.wait_for_load_state("domcontentloaded", timeout=60000)
                         await sleep_ms(1000, 2000)
                     except Exception:
                         pass
