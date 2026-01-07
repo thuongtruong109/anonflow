@@ -12,6 +12,7 @@ from services import (
     delete_profile,
     remember_debug_addr,
     get_debug_addr,
+    update_profile,
 )
 
 def process_row(name, cookie, proxy_raw, index, actions, total_profiles=None):
@@ -44,6 +45,11 @@ def process_row(name, cookie, proxy_raw, index, actions, total_profiles=None):
             safe_print(f"✅ Created {profile_name}")
         else:
             pid = get_profile_id(profile_name)
+
+        if actions.get("update"):
+            pid = get_profile_id(profile_name)
+            update_profile(pid, proxy)
+            safe_print(f"🔄 Updated proxy for {profile_name}")
 
         if actions["start"] or actions["import"] or actions["pw"]:
             # Check if profile is already started

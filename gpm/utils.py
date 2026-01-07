@@ -108,12 +108,6 @@ def normalize_ext(s: str) -> str:
     s = unicodedata.normalize("NFKC", s)
     s = s.casefold()
     s = s.replace("ı", "i")
-    return s
-
-def hardcore_normalize(s: str) -> str:
-    s = unicodedata.normalize("NFKC", s)
-    s = s.casefold()
-    s = s.replace("ı", "i")
 
     s = "".join(
         c for c in s
@@ -124,7 +118,7 @@ def hardcore_normalize(s: str) -> str:
 
 def detect_username_from_cookie_filename(text: str) -> str:
     username = re.search(r'\[([^\]]+)\]\.txt$', text)
-    return normalize_ext(username.group(1)) if username else "Unknown"
+    return normalize_ext(username.group(1)) if username else ""
 
 def copy_folder(source: str, destination: str):
     os.makedirs(destination, exist_ok=True)

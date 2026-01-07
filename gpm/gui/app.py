@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QGroupBox, QGridLayout, QMessageBox,
     QFileDialog, QSplitter, QFrame, QLineEdit, QSpinBox, QCheckBox,
-    QScrollArea, QRadioButton
+    QScrollArea, QRadioButton, QSizePolicy
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QFont, QTextCursor
@@ -15,7 +15,6 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
-from config import setup_logger
 from excel import update_excel_column_a_with_cookie_files, read_excel
 from services import create_profile, start_profile, close_profile, delete_profile
 from runner import run_all_playwright
@@ -139,7 +138,6 @@ class GPMMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_worker = None
-        self.logger = setup_logger("gui")
         self.task_buttons = []
         self.task_checkboxes = []
         self.task_queue = []
@@ -149,7 +147,7 @@ class GPMMainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Anonflow")
-        self.setMinimumSize(1250, 750)
+        self.setMinimumSize(1100, 750)
 
         self.apply_dark_theme()
 
@@ -213,7 +211,6 @@ class GPMMainWindow(QMainWindow):
                 font-family: 'Segoe UI', Arial;
             }
             QGroupBox {
-                background-color: #1a1a1a;
                 border: 2px solid #2196F3;
                 border-radius: 8px;
                 margin-top: 10px;
@@ -445,6 +442,9 @@ class GPMMainWindow(QMainWindow):
         create_profiles_btn = ModernButton("Create Profiles", "➕", "#2196F3")
         create_profiles_btn.clicked.connect(self.create_profiles)
 
+        update_proxies_btn = ModernButton("Update Proxies", "🔄", "#00BCD4")
+        update_proxies_btn.clicked.connect(self.update_proxies)
+
         view_btn = ModernButton("View File", "📊", "#9C27B0")
         view_btn.clicked.connect(self.view_excel_file)
 
@@ -455,6 +455,7 @@ class GPMMainWindow(QMainWindow):
         save_btn.clicked.connect(self.save_proxies_to_excel)
 
         buttons_layout.addWidget(create_profiles_btn)
+        buttons_layout.addWidget(update_proxies_btn)
         buttons_layout.addWidget(view_btn)
         buttons_layout.addWidget(reload_btn)
         buttons_layout.addWidget(save_btn)
@@ -991,6 +992,11 @@ class GPMMainWindow(QMainWindow):
         mode_layout.addWidget(self.search_radio)
         mode_layout.addStretch()
 
+        # Align all items to top to prevent floating in the middle
+        mode_layout.setAlignment(mode_label, Qt.AlignTop)
+        mode_layout.setAlignment(self.tiktok_radio, Qt.AlignTop)
+        mode_layout.setAlignment(self.search_radio, Qt.AlignTop)
+
         layout.addLayout(mode_layout)
 
         # Search time input (initially hidden) - giờ và phút
@@ -1058,7 +1064,12 @@ class GPMMainWindow(QMainWindow):
         for i in range(5):  # 5 widgets: label, hours_input, hours_label, minutes_input, minutes_label
             self.search_time_layout.itemAt(i).widget().setVisible(False)
 
-        layout.addLayout(self.search_time_layout)
+        # Wrap search time layout in widget for alignment
+        search_time_widget = QWidget()
+        search_time_widget.setLayout(self.search_time_layout)
+        search_time_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
+        layout.addWidget(search_time_widget, alignment=Qt.AlignTop)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1446,13 +1457,12 @@ class GPMMainWindow(QMainWindow):
                 'index': idx
             })
 
-            # Set View video as default checked
             if name == "View video":
                 checkbox.setChecked(True)
 
         tasks_layout.addStretch()
         scroll.setWidget(tasks_container)
-        layout.addWidget(scroll)
+        layout.addWidget(scroll, alignment=Qt.AlignTop)
 
         # Connect radio button signals to toggle visibility
         def toggle_mode():
@@ -1465,26 +1475,17 @@ class GPMMainWindow(QMainWindow):
         self.tiktok_radio.toggled.connect(toggle_mode)
         self.search_radio.toggled.connect(toggle_mode)
 
-        # Initially show Tiktok mode
         toggle_mode()
 
-        # Buttons layout for Run only (no stop button for behavior actions)
-        # NOTE: Behavior tasks cannot run independently - they require profile startup
-        # They are integrated into the main workflow via the "Run Tasks" button
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(8)
 
-        # Note: Behavior tasks cannot run independently - they require profile startup
-        # The run button has been removed. Use the main "Run Tasks" button instead.
-        # self.run_behavior_btn = ModernButton("Run Selected Tasks", "🚀", "#4CAF50")
-        # self.run_behavior_btn.setMinimumHeight(35)
-        # self.run_behavior_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        # self.run_behavior_btn.clicked.connect(self.run_selected_behavior_tasks)
-
-        # buttons_layout.addWidget(self.run_behavior_btn)
         buttons_layout.addStretch()
 
         layout.addLayout(buttons_layout)
+
+        # Add stretch to push everything to top
+        layout.addStretch()
 
         group.setLayout(layout)
         return group
@@ -1606,7 +1607,7 @@ class GPMMainWindow(QMainWindow):
                 margin = 20
 
                 save_x = width - self.save_btn.width() - margin
-                save_y = height - self.save_btn.height() - margin
+                save_y = height - self.save_btn.height() - margin/2
 
                 clear_x = save_x - self.clear_btn.width() - button_spacing
                 clear_y = save_y
@@ -1803,7 +1804,7 @@ class GPMMainWindow(QMainWindow):
                     proxies_list.append(f"{i}. {proxy}")
 
             # Update text area
-            proxies_text = "\n".join(proxies_list) if proxies_list else "⚠️ No proxies found"
+            proxies_text = "\n\n".join(proxies_list) if proxies_list else "⚠️ No proxies found"
             self.proxies_text.setPlainText(proxies_text)
 
             if hasattr(self, 'terminal'):
@@ -2259,6 +2260,33 @@ class GPMMainWindow(QMainWindow):
         self.log(f"{'='*70}\n")
 
         self.run_tasks_with_actions(actions, "➕ Create Profiles")
+
+    def update_proxies(self):
+        if self.current_worker and self.current_worker.isRunning():
+            self.log("⚠️ Another task is running. Please wait...")
+            return
+
+        self.stop_requested = False
+
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.setEnabled(True)
+
+        actions = {
+            "handle_cookies": False,
+            "create": False,
+            "start": False,
+            "pw": False,
+            "import": False,
+            "close": False,
+            "delete": False,
+            "update": True,
+        }
+
+        self.log(f"\n{'='*70}")
+        self.log("📋 Running task: 🔄 Update Proxies")
+        self.log(f"{'='*70}\n")
+
+        self.run_tasks_with_actions(actions, "🔄 Update Proxies")
 
 def run_gui():
     app = QApplication(sys.argv)

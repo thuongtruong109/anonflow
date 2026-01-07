@@ -1,6 +1,6 @@
 """
 Test script để kiểm tra logging logic
-Chỉ log khi username != "unknown"
+Chỉ log khi username != ""
 """
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +33,7 @@ def test_like_logging(username: str):
 
     if like_success:
         # Chỉ log khi có username thực sự
-        if username and username != "unknown":
+        if username and username != "":
             _log_action("like.log", username, "https://tiktok.com/@user/video/123", "Liked video")
             return True
         else:
@@ -46,7 +46,7 @@ def test_comment_logging(username: str, comment_text: str):
 
     if comment_success:
         # Chỉ log khi có username thực sự
-        if username and username != "unknown":
+        if username and username != "":
             _log_action("comment.log", username, "https://tiktok.com/@user/video/456", f"Commented: {comment_text}")
             return True
         else:
@@ -62,10 +62,10 @@ if __name__ == "__main__":
     test_comment_logging("[10100 followers] [101 videos] user1", "Great video! 👍")
     print()
 
-    # Test case 2: Username = "unknown" - KHÔNG LOG
-    print("2. Testing with 'unknown' username:")
-    test_like_logging("unknown")
-    test_comment_logging("unknown", "Nice content!")
+    # Test case 2: Username = "" - KHÔNG LOG
+    print("2. Testing with '' :")
+    test_like_logging("")
+    test_comment_logging("", "Nice content!")
     print()
 
     # Test case 3: Username empty - KHÔNG LOG

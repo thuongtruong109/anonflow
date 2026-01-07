@@ -57,6 +57,16 @@ def get_profile_id(name: str) -> str:
             return pid
     raise RuntimeError("Profile not found")
 
+def update_profile(pid: str, proxy: str):
+    r = api_post(f"/api/v3/profiles/update/{pid}", {
+        "raw_proxy": proxy
+    })
+
+    if isinstance(r, dict) and (r.get("success") is False):
+        raise RuntimeError(r.get("message") or f"Update failed for {pid}")
+
+    return r
+
 def start_profile(pid: str, index: int, total_profiles: int = None) -> str:
     with config.start_sem:
         win_info = compute_win_pos(index, total_profiles)

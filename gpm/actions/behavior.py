@@ -146,7 +146,7 @@ async def get_current_video_url(page: Page) -> str | None:
         return None
 
 
-async def track_and_log_video(page: Page, username: str = "unknown") -> None:
+async def track_and_log_video(page: Page, username: str = "") -> None:
     global _current_video_url
 
     try:
@@ -155,14 +155,14 @@ async def track_and_log_video(page: Page, username: str = "unknown") -> None:
         if video_url and video_url != _current_video_url:
             _current_video_url = video_url
 
-            if username and username != "unknown":
+            if username and username != "":
                 _log_action("like.log", username, video_url, "Now watching")
 
     except Exception as e:
         pass
 
 
-async def check_login_status(page: Page, username: str = "unknown") -> bool:
+async def check_login_status(page: Page, username: str = "") -> bool:
     try:
         # Wait a bit for the page to load elements (TikTok can be slow)
         await sleep_ms(2000, 4000)
@@ -182,7 +182,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
         # Check primary logged-in selector
         logged_in_el = page.locator(logged_in_selector).first
         if await logged_in_el.count() > 0 and await logged_in_el.is_visible():
-            if username and username != "unknown":
+            if username and username != "":
                 _log_action(
                     "login.log",
                     username,
@@ -195,7 +195,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
         for selector in alt_logged_in_selectors:
             el = page.locator(selector).first
             if await el.count() > 0 and await el.is_visible():
-                if username and username != "unknown":
+                if username and username != "":
                     _log_action(
                         "login.log",
                         username,
@@ -207,7 +207,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
         # Check not-logged-in selectors
         not_logged_in_el = page.locator(not_logged_in_selector).first
         if await not_logged_in_el.count() > 0 and await not_logged_in_el.is_visible():
-            if username and username != "unknown":
+            if username and username != "":
                 _log_action(
                     "login.log",
                     username,
@@ -220,7 +220,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
         for selector in alt_not_logged_in_selectors:
             el = page.locator(selector).first
             if await el.count() > 0 and await el.is_visible():
-                if username and username != "unknown":
+                if username and username != "":
                     _log_action(
                         "login.log",
                         username,
@@ -231,7 +231,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
 
         # Fallback: If on own profile and no follow button, assume logged in (but log for review)
         # This is a heuristic—test carefully to avoid false positives
-        if username and username != "unknown" and f"/@{username}" in page.url:
+        if username and username != "" and f"/@{username}" in page.url:
             follow_check = page.locator('[data-e2e="follow-button"]')
             if await follow_check.count() == 0:
                 _log_action(
@@ -243,7 +243,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
                 return True
 
         # No match found
-        if username and username != "unknown":
+        if username and username != "":
             _log_action(
                 "login.log",
                 username,
@@ -253,7 +253,7 @@ async def check_login_status(page: Page, username: str = "unknown") -> bool:
         return False
 
     except Exception as e:
-        if username and username != "unknown":
+        if username and username != "":
             _log_action(
                 "login.log",
                 username,
@@ -276,7 +276,7 @@ async def click_author_avatar_if_any(page: Page) -> bool:
 
 async def visit_target_pivot_and_follow(
     page: Page,
-    username: str = "unknown",
+    username: str = "",
     target_username: str = None,
     max_retries: int = 3
 ) -> bool:
@@ -426,9 +426,12 @@ async def visit_target_pivot_and_follow(
     return False
 
 
-async def random_like_video(page: Page, username: str = "unknown") -> bool:
+async def random_like_video(page: Page, username: str = "") -> bool:
     """
-    Thực hiện like video hiện tại.
+    Thực hiện like video hiện tại với hành vi tự nhiên:
+    - Đôi khi miss button và phải click lại
+    - Pause trước khi like (như đang suy nghĩ)
+    - Đôi khi unlike ngay sau đó (changed mind)
 
     Hỗ trợ 2 loại like button:
     1. Feed video: span[data-e2e="like-icon"]
@@ -441,11 +444,10 @@ async def random_like_video(page: Page, username: str = "unknown") -> bool:
     Returns:
         True nếu like thành công, False nếu không.
     """
-    await sleep_ms(500, 1200)
+    # Pause trước khi like - con người cần thời gian quyết định
+    await sleep_ms(500, 1800)
 
     # Selector cho like button (theo thứ tự ưu tiên)
-    # 1. Video feed ngoài profile: span[data-e2e="like-icon"]
-    # 2. Video trong profile: span[data-e2e="browse-like-icon"]
     like_button_selectors = [
         'span[data-e2e="like-icon"]',         # Feed video
         'span[data-e2e="browse-like-icon"]',  # Profile video
@@ -457,31 +459,58 @@ async def random_like_video(page: Page, username: str = "unknown") -> bool:
         try:
             like_btn = page.locator(selector).first
             if await like_btn.count() > 0 and await like_btn.is_visible():
-                # Kiểm tra xem đã like chưa bằng cách check parent element hoặc SVG fill color
+                # Kiểm tra xem đã like chưa
                 try:
-                    # TikTok thường thay đổi class hoặc thuộc tính khi đã like
-                    # Có thể check SVG fill color (red = đã like, white/gray = chưa like)
                     parent = like_btn.locator('..').first
                     parent_classes = await parent.get_attribute("class") or ""
-
-                    # Hoặc check aria-pressed nếu có
                     aria_pressed = await like_btn.get_attribute("aria-pressed")
-                    if aria_pressed == "true":
-                        # Đã like rồi
-                        return False
 
-                    # Check trong class name xem có chứa "liked" hoặc "active"
-                    if "liked" in parent_classes.lower() or "active" in parent_classes.lower():
+                    if aria_pressed == "true" or "liked" in parent_classes.lower() or "active" in parent_classes.lower():
                         return False
                 except Exception:
                     pass
 
+                # Hover trước khi click (như chuột di chuyển đến)
+                try:
+                    await like_btn.hover()
+                    await sleep_ms(150, 500)
+                except Exception:
+                    pass
+
+                # 5% cơ hội miss lần đầu (click chệch)
+                if chance(0.05):
+                    # Click gần button nhưng không trúng
+                    box = await like_btn.bounding_box()
+                    if box:
+                        offset_x = random.uniform(-15, 15)
+                        offset_y = random.uniform(-15, 15)
+                        await page.mouse.click(
+                            box["x"] + box["width"]/2 + offset_x,
+                            box["y"] + box["height"]/2 + offset_y
+                        )
+                        await sleep_ms(200, 500)  # nhận ra miss
+
+                # Click thực sự
                 await like_btn.click(timeout=2000)
                 like_success = True
                 await sleep_ms(800, 1500)
 
-                # Log action - chỉ log khi có username thực sự (không phải "unknown")
-                if username and username != "unknown":
+                # 3% cơ hội "changed mind" - unlike ngay sau đó
+                if chance(0.03):
+                    await sleep_ms(500, 1200)
+                    try:
+                        # Click lại để unlike
+                        await like_btn.click(timeout=2000)
+                        await sleep_ms(400, 900)
+                        # Rồi like lại (or not)
+                        if chance(0.5):
+                            await sleep_ms(300, 700)
+                            await like_btn.click(timeout=2000)
+                    except Exception:
+                        pass
+
+                # Log action
+                if username and username != "":
                     video_url = page.url
                     _log_action("like.log", username, video_url, "Liked video")
 
@@ -491,9 +520,120 @@ async def random_like_video(page: Page, username: str = "unknown") -> bool:
 
     return like_success
 
-async def random_comment_on_video(page: Page, username: str = "unknown", text_randomizer: TextRandomizer = None) -> bool:
+async def random_follow_in_feed(page: Page, username: str = "") -> bool:
     """
-    Thêm comment ngẫu nhiên vào video hiện tại.
+    Click nút follow ngẫu nhiên khi đang lướt feed với hành vi tự nhiên.
+
+    Selector: button[data-e2e="feed-follow"]
+
+    Verify success bằng cách check button có chứa checkmark SVG sau khi click:
+    - Before: SVG với path chứa "M26 7a1 1 0 0 0-1-1h-2..." (plus icon)
+    - After: SVG với path chứa "M43 6.08c.7.45..." (checkmark icon)
+
+    Args:
+        page: Playwright Page object
+        username: Tên người dùng thực hiện action (để log)
+
+    Returns:
+        True nếu follow thành công, False nếu không
+    """
+    try:
+        # Pause trước khi follow (như đang quyết định)
+        await sleep_ms(500, 1500)
+
+        # Tìm nút follow trong feed
+        feed_follow_selector = 'button[data-e2e="feed-follow"]'
+        follow_btn = page.locator(feed_follow_selector).first
+
+        # Check button có tồn tại và visible không
+        if await follow_btn.count() == 0 or not await follow_btn.is_visible():
+            return False
+
+        # Check xem đã follow chưa bằng cách kiểm tra SVG path
+        try:
+            svg_path = follow_btn.locator('svg path').first
+            if await svg_path.count() > 0:
+                path_d = await svg_path.get_attribute('d')
+                # Nếu có checkmark icon thì đã follow rồi
+                if path_d and 'M43 6.08c.7.45' in path_d:
+                    return False
+        except Exception:
+            pass
+
+        # Hover trước khi click
+        try:
+            await follow_btn.hover()
+            await sleep_ms(200, 600)
+        except Exception:
+            pass
+
+        # 5% cơ hội miss lần đầu
+        if chance(0.05):
+            box = await follow_btn.bounding_box()
+            if box:
+                offset_x = random.uniform(-10, 10)
+                offset_y = random.uniform(-10, 10)
+                await page.mouse.click(
+                    box["x"] + box["width"]/2 + offset_x,
+                    box["y"] + box["height"]/2 + offset_y
+                )
+                await sleep_ms(200, 500)
+
+        # Click nút follow
+        await follow_btn.click(timeout=3000)
+        await sleep_ms(1000, 2000)
+
+        # Verify follow thành công bằng cách check SVG path đã đổi chưa
+        follow_success = False
+        try:
+            svg_path = follow_btn.locator('svg path').first
+            if await svg_path.count() > 0:
+                new_path_d = await svg_path.get_attribute('d')
+                # Check xem có checkmark icon không
+                if new_path_d and 'M43 6.08c.7.45' in new_path_d:
+                    follow_success = True
+        except Exception:
+            pass
+
+        # Nếu không verify được, đợi thêm rồi check lại
+        if not follow_success:
+            await sleep_ms(1000, 1500)
+            try:
+                svg_path = follow_btn.locator('svg path').first
+                if await svg_path.count() > 0:
+                    final_path_d = await svg_path.get_attribute('d')
+                    if final_path_d and 'M43 6.08c.7.45' in final_path_d:
+                        follow_success = True
+            except Exception:
+                pass
+
+        # Log action nếu follow thành công
+        if follow_success and username and username != "":
+            video_url = page.url
+            # Lấy username của author nếu có
+            try:
+                author_link = page.locator('a[data-e2e="video-author-uniqueid"]').first
+                if await author_link.count() > 0:
+                    author_href = await author_link.get_attribute("href")
+                    if author_href and "/@" in author_href:
+                        target_user = author_href.split("/@")[-1].split("/")[0].split("?")[0]
+                        _log_action("follow.log", username, video_url, f"Followed {target_user} (feed)")
+            except Exception:
+                _log_action("follow.log", username, video_url, "Followed author (feed)")
+
+        return follow_success
+
+    except Exception as e:
+        return False
+
+async def random_comment_on_video(page: Page, username: str = "", text_randomizer: TextRandomizer = None) -> bool:
+    """
+    Thêm comment ngẫu nhiên vào video hiện tại với hành vi tự nhiên:
+    - Typing speed thay đổi (nhanh-chậm-nhanh)
+    - Đôi khi pause giữa chừng (suy nghĩ)
+    - Đôi khi sửa lỗi chính tả (backspace)
+    - Đôi khi xóa và viết lại
+
     Hỗ trợ 2 loại selector:
     1. Comment trong profile video: div[data-e2e="comment-input"]
     2. Comment trong feed video: div.public-DraftEditorPlaceholder-inner
@@ -501,7 +641,6 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
     Returns True nếu comment thành công, False nếu không.
     """
     if text_randomizer is None:
-        # Khởi tạo TextRandomizer với ngôn ngữ tiếng Anh (có thể đổi sang "vi")
         text_randomizer = TextRandomizer(lang="en")
 
     # Sinh comment text ngẫu nhiên
@@ -512,9 +651,10 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
         unique=True
     )
 
-    await sleep_ms(800, 1500)
+    # Pause trước khi comment (suy nghĩ nội dung)
+    await sleep_ms(800, 2000)
 
-    # Thử click vào comment input (profile video)
+    # Thử click vào comment input
     profile_comment_selector = 'div[data-e2e="comment-input"]'
     feed_comment_selector = 'div.public-DraftEditorPlaceholder-inner'
 
@@ -524,6 +664,12 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
     try:
         profile_input = page.locator(profile_comment_selector).first
         if await profile_input.count() > 0 and await profile_input.is_visible():
+            # Hover trước khi click
+            try:
+                await profile_input.hover()
+                await sleep_ms(200, 500)
+            except Exception:
+                pass
             await profile_input.click(timeout=3000)
             comment_clicked = True
             await sleep_ms(500, 1000)
@@ -535,6 +681,11 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
         try:
             feed_input = page.locator(feed_comment_selector).first
             if await feed_input.count() > 0 and await feed_input.is_visible():
+                try:
+                    await feed_input.hover()
+                    await sleep_ms(200, 500)
+                except Exception:
+                    pass
                 await feed_input.click(timeout=3000)
                 comment_clicked = True
                 await sleep_ms(500, 1000)
@@ -545,9 +696,7 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
         return False
 
     # Tìm text editor để nhập comment
-    # TikTok sử dụng contenteditable div
     try:
-        # Thử tìm text editor
         editor_selectors = [
             'div[data-e2e="comment-text"] div[contenteditable="true"]',
             'div[contenteditable="true"][data-text="true"]',
@@ -559,16 +708,82 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
             try:
                 editor = page.locator(selector).first
                 if await editor.count() > 0:
-                    # Focus vào editor
                     await editor.focus(timeout=2000)
                     await sleep_ms(300, 600)
 
-                    # Gõ text từng ký tự với delay ngẫu nhiên (giống người thật)
-                    for char in comment_text:
-                        await page.keyboard.type(char, delay=random.randint(50, 150))
+                    # Typing tự nhiên với variable speed và behaviors
+                    words = comment_text.split()
+                    typing_speed_base = random.randint(50, 150)  # Base WPM
+
+                    for word_idx, word in enumerate(words):
+                        # 10% cơ hội pause trước từ (như đang suy nghĩ)
+                        if word_idx > 0 and chance(0.10):
+                            await sleep_ms(500, 1500)
+
+                        # Typing từng ký tự với speed thay đổi
+                        for char_idx, char in enumerate(word):
+                            # Tốc độ typing thay đổi theo vị trí trong từ
+                            if char_idx == 0:  # Đầu từ chậm hơn
+                                delay = typing_speed_base + random.randint(20, 50)
+                            elif char_idx == len(word) - 1:  # Cuối từ cũng chậm
+                                delay = typing_speed_base + random.randint(10, 30)
+                            else:  # Giữa từ nhanh hơn
+                                delay = typing_speed_base - random.randint(0, 20)
+
+                            # Thêm jitter
+                            delay = max(30, delay + random.randint(-15, 15))
+
+                            # 2% cơ hội typo (gõ sai rồi backspace)
+                            if chance(0.02) and char_idx < len(word) - 1:
+                                # Gõ sai
+                                wrong_char = random.choice('qwertyuiopasdfghjklzxcvbnm')
+                                await page.keyboard.type(wrong_char, delay=delay)
+                                await sleep_ms(100, 300)  # Nhận ra sai
+                                await page.keyboard.press("Backspace")
+                                await sleep_ms(50, 150)
+
+                            await page.keyboard.type(char, delay=delay)
+
+                        # Thêm space sau mỗi từ (trừ từ cuối)
+                        if word_idx < len(words) - 1:
+                            await page.keyboard.press("Space")
+                            await sleep_ms(50, 150)
+
+                        # 5% cơ hội pause giữa các từ (đang suy nghĩ)
+                        if chance(0.05):
+                            await sleep_ms(300, 1000)
 
                     editor_found = True
-                    await sleep_ms(800, 1500)
+
+                    # Pause trước khi submit (đọc lại comment)
+                    await sleep_ms(800, 2000)
+
+                    # 3% cơ hội xóa và viết lại (changed mind)
+                    if chance(0.03):
+                        # Select all và xóa
+                        await page.keyboard.press("Control+A")
+                        await sleep_ms(200, 500)
+                        await page.keyboard.press("Backspace")
+                        await sleep_ms(500, 1200)
+
+                        # Viết lại (có thể khác hoặc giống)
+                        if chance(0.5):
+                            # Viết lại comment khác
+                            new_comment = text_randomizer.comment(
+                                context=random.choice(["generic", "like"]),
+                                tone=random.choice(["friendly", "enthusiastic"]),
+                                length="short",
+                                unique=True
+                            )
+                            for char in new_comment:
+                                await page.keyboard.type(char, delay=random.randint(50, 120))
+                        else:
+                            # Viết lại comment cũ
+                            for char in comment_text:
+                                await page.keyboard.type(char, delay=random.randint(50, 120))
+
+                        await sleep_ms(500, 1200)
+
                     break
             except Exception:
                 continue
@@ -576,14 +791,20 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
         if not editor_found:
             return False
 
-        # Submit comment: thử click nút Post trước, nếu không có thì nhấn Enter
+        # Submit comment
         await sleep_ms(500, 1000)
 
-        # Thử tìm và click nút Post (chỉ khi aria-disabled="false")
+        # Thử tìm và click nút Post
         post_button_clicked = False
         try:
             post_button = page.locator('div[data-e2e="comment-post"][aria-disabled="false"]').first
             if await post_button.count() > 0 and await post_button.is_visible():
+                # Hover trước khi click
+                try:
+                    await post_button.hover()
+                    await sleep_ms(150, 400)
+                except Exception:
+                    pass
                 await post_button.click(timeout=2000)
                 post_button_clicked = True
                 await sleep_ms(1000, 2000)
@@ -598,8 +819,8 @@ async def random_comment_on_video(page: Page, username: str = "unknown", text_ra
             except Exception:
                 pass
 
-        # Log action - chỉ log khi có username thực sự (không phải "unknown")
-        if username and username != "unknown":
+        # Log action - chỉ log khi có username thực sự (không phải "")
+        if username and username != "":
             video_url = page.url
             _log_action("comment.log", username, video_url, f"Commented: {comment_text}")
 
@@ -614,12 +835,13 @@ async def click_author_avatar_if_any(page: Page) -> bool:
 def is_bridge_link(url: str) -> bool:
     return re.search(r"(onelink\.me|snssdk)", url, re.IGNORECASE) is not None
 
-async def random_interact_in_profile(page: Page, username: str = "unknown", is_logged_in: bool = True):
+async def random_interact_in_profile(page: Page, username: str = "", is_logged_in: bool = True):
     """
-    Human-ish profile browsing:
-    - slow scroll chunks
-    - occasional backtrack
-    - hover, pause, open a random video
+    Human-ish profile browsing với các hành vi tự nhiên:
+    - Variable scroll patterns (không đều đặn)
+    - Reading pauses at different content
+    - Natural video selection (không random hoàn toàn)
+    - Realistic engagement behaviors
 
     Args:
         username: Tên profile/user thực hiện actions (để log)
@@ -643,7 +865,7 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
         except Exception:
             continue
 
-    # Nếu không có video trong profile, quay về /foryou ngay lập tức
+    # Nếu không có video trong profile, quay về /foryou
     if has_no_content:
         try:
             await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
@@ -654,30 +876,57 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
             pass
         return
 
+    # Scroll với pattern tự nhiên - không đều đặn
     scroll_rounds = randi(3, 7)
-    for _ in range(scroll_rounds):
+    for i in range(scroll_rounds):
+        # Variable scroll distance - đôi khi scroll nhiều, đôi khi ít
+        if chance(0.3):  # 30% scroll ngắn (reading)
+            scroll_px = randi(300, 700)
+        elif chance(0.15):  # 15% scroll dài (skimming)
+            scroll_px = randi(1200, 2000)
+        else:  # 55% scroll bình thường
+            scroll_px = randi(700, 1200)
+
         await human_scroll_wheel(
             page,
-            randi(700, 1500),
+            scroll_px,
             step_range=(90, 210),
             pause_range=(180, 720),
             sometimes_hesitate=True,
             sometimes_backtrack=True,
         )
-        if chance(0.18):
+
+        # Đôi khi backtrack nhiều hơn (nhìn lại video vừa scroll qua)
+        if chance(0.25):
             await human_scroll_wheel(
                 page,
-                -randi(180, 460),
+                -randi(180, 600),
                 step_range=(70, 150),
                 pause_range=(160, 560),
             )
-        await sleep_ms(700, 2200)
+
+        # Variable pause between scrolls - đôi khi đọc lâu
+        if chance(0.3):
+            await sleep_ms(1500, 3500)  # Reading pause
+        else:
+            await sleep_ms(700, 2200)
+
+        # 10% cơ hội mouse hover trên video thumbnail (như đang xem preview)
+        if chance(0.10):
+            try:
+                videos = await page.locator('a[href*="/video/"]').all()
+                if videos:
+                    random_video = random.choice(videos)
+                    await random_video.hover()
+                    await sleep_ms(800, 2000)
+            except Exception:
+                pass
 
     links = await page.locator('a[href*="/video/"]').all()
     if len(links) > 3:
         links = links[2:]
 
-    # Nếu không tìm thấy video nào trong profile sau khi scroll, quay về /foryou để lướt
+    # Nếu không tìm thấy video nào, quay về /foryou
     if not links:
         try:
             await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
@@ -688,7 +937,15 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
             pass
         return
 
-    video = random.choice(links)
+    # Chọn video theo pattern tự nhiên (không hoàn toàn random)
+    # Con người thường chọn video ở vị trí đặc biệt (đầu list, hoặc video đã scroll đến)
+    if chance(0.4):  # 40% chọn video ở đầu/gần đầu
+        video = links[0] if len(links) == 1 else links[random.randint(0, min(2, len(links)-1))]
+    elif chance(0.3):  # 30% chọn video ở giữa
+        mid = len(links) // 2
+        video = links[random.randint(max(0, mid-2), min(len(links)-1, mid+2))]
+    else:  # 30% random hoàn toàn
+        video = random.choice(links)
 
     try:
         await video.scroll_into_view_if_needed()
@@ -698,40 +955,61 @@ async def random_interact_in_profile(page: Page, username: str = "unknown", is_l
     await sleep_ms(900, 2200)
 
     try:
+        # Hover trước khi click
         await video.hover()
         await sleep_ms(450, 1400)
+
+        # Jitter mouse đôi khi (như đang xem preview)
         if chance(0.25):
             await jitter_mouse(page, steps_min=1, steps_max=2)
+
+        # 3% cơ hội miss click
+        if chance(0.03):
+            box = await video.bounding_box()
+            if box:
+                # Click chệch
+                await page.mouse.click(
+                    box["x"] + box["width"]/2 + random.uniform(-20, 20),
+                    box["y"] + box["height"]/2 + random.uniform(-20, 20)
+                )
+                await sleep_ms(300, 700)  # nhận ra miss
+
         await video.click()
     except Exception:
         return
 
-    # Đợi page load sau khi click vào video
+    # Đợi page load
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=60000)
         await sleep_ms(1000, 2000)
     except Exception:
         pass
 
+    # Watch với variable engagement
     await watch_like_human(page, min_ms=7000, max_ms=22000, mouse_jitter=True)
     await sleep_ms(1200, 5200)
 
-    # Thêm hành vi like ngẫu nhiên (tỉ lệ cao hơn comment) - CHỈ KHI ĐÃ LOGIN
-    if is_logged_in and chance(0.40):  # 40% cơ hội like
-        await sleep_ms(600, 1400)
+    # Like với tỉ lệ tự nhiên - CHỈ KHI ĐÃ LOGIN
+    if is_logged_in and chance(0.45):  # 45% cơ hội like (tăng từ 40%)
+        await sleep_ms(600, 1800)
         like_success = await random_like_video(page, username=username)
         if like_success:
             await sleep_ms(800, 1800)
 
-    # Thêm hành vi comment ngẫu nhiên khi xem video trong profile - CHỈ KHI ĐÃ LOGIN
-    if is_logged_in and chance(0.30):  # 30% cơ hội comment (thấp hơn like một xíu)
+    # Comment với tỉ lệ thấp hơn - CHỈ KHI ĐÃ LOGIN
+    if is_logged_in and chance(0.25):  # 25% cơ hội comment (giảm từ 30%)
         await sleep_ms(800, 1800)
         comment_success = await random_comment_on_video(page, username=username)
         if comment_success:
             await sleep_ms(1500, 3000)
 
+    # Go back với natural behavior
     try:
-        await page.go_back()
+        # 70% dùng back button, 30% dùng keyboard
+        if chance(0.7):
+            await page.go_back()
+        else:
+            await page.keyboard.press("Alt+Left")
     except Exception:
         try:
             await page.keyboard.press("Alt+Left")
@@ -839,46 +1117,93 @@ async def run_tiktok_flow(
 
         if view_video:
             print(f"🎬 [{username}] Starting view video loop for {will_view_amount} videos")
+
+            # Track fatigue và engagement để điều chỉnh behavior
+            fatigue_level = 0.0  # 0-1, càng cao càng mệt
+            session_engagement = random.uniform(0.6, 0.9)  # Engagement ban đầu
+
             for i in range(will_view_amount):
                 print(f"👀 [{username}] Watching video {i+1}/{will_view_amount}")
 
-                # 1) watch current video naturally
-                await watch_like_human(page, min_ms=6000, max_ms=20000, mouse_jitter=True)
+                # Update fatigue (tăng dần theo thời gian, đôi khi recover)
+                fatigue_level += random.uniform(0.02, 0.08)
+                if chance(0.15):  # 15% cơ hội "refresh" (như khi thấy video hay)
+                    fatigue_level = max(0, fatigue_level - random.uniform(0.1, 0.3))
+                    session_engagement = min(1.0, session_engagement + 0.1)
+                fatigue_level = min(1.0, fatigue_level)
 
-                # 1.5) like the video if enabled - CHỈ KHI ĐÃ LOGIN
+                # Engagement decay với fatigue
+                session_engagement -= fatigue_level * 0.05
+                session_engagement = max(0.3, min(1.0, session_engagement))
+
+                # 1) Watch với duration phụ thuộc vào engagement và fatigue
+                # High engagement + low fatigue = watch lâu hơn
+                # Low engagement + high fatigue = watch ngắn hơn
+                engagement_multiplier = (session_engagement * (1 - fatigue_level * 0.5))
+                watch_min = int(6000 * (0.5 + engagement_multiplier * 0.5))
+                watch_max = int(20000 * (0.5 + engagement_multiplier * 0.5))
+
+                await watch_like_human(page, min_ms=watch_min, max_ms=watch_max, mouse_jitter=True)
+
+                # 1.5) Like phụ thuộc vào engagement - CHỈ KHI ĐÃ LOGIN
                 if is_logged_in and like_video:
-                    await sleep_ms(600, 1400)
-                    like_success = await random_like_video(page, username=username)
-                    if like_success:
-                        await sleep_ms(800, 1800)
+                    # Tỉ lệ like tăng với engagement, giảm với fatigue
+                    like_chance = 0.35 * session_engagement * (1 - fatigue_level * 0.3)
+                    if chance(like_chance):
+                        await sleep_ms(600, 1400)
+                        like_success = await random_like_video(page, username=username)
+                        if like_success:
+                            await sleep_ms(800, 1800)
+                            # Like thành công tăng engagement một chút
+                            session_engagement = min(1.0, session_engagement + 0.05)
 
-                # 2) small scroll nudges (not big jumps)
-                if chance(0.55):
+                # 1.6) Follow in feed - CHỈ KHI ĐÃ LOGIN và follow enabled
+                if is_logged_in and follow:
+                    # Tỉ lệ follow giảm với fatigue (thấp hơn like)
+                    feed_follow_chance = 0.20 * session_engagement * (1 - fatigue_level * 0.5)
+                    if chance(feed_follow_chance):
+                        await sleep_ms(800, 1800)
+                        follow_success = await random_follow_in_feed(page, username=username)
+                        if follow_success:
+                            await sleep_ms(1000, 2000)
+                            # Follow thành công tăng engagement
+                            session_engagement = min(1.0, session_engagement + 0.08)
+
+                # 2) Scroll behaviors - giảm dần khi fatigue cao
+                if chance(0.55 * (1 - fatigue_level * 0.5)):
                     await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
                 if chance(0.10):
                     await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
 
-                # 3) open comments if commenting is enabled or sometimes randomly
-                should_open_comments = comment or chance(0.22)
+                # 3) Comments - tỉ lệ thấp và phụ thuộc vào engagement
+                should_open_comments = (comment and chance(0.6)) or chance(0.22 * session_engagement)
                 if should_open_comments:
                     await sleep_ms(900, 2400)
                     await safe_click_xpath(page, "//*[@data-e2e='comment-icon']", timeout_ms=6000)
 
                     # "read" comments
-                    await sleep_ms(1800, 6000)
+                    reading_time = randi(1800, 6000)
+                    # High engagement = đọc lâu hơn
+                    reading_time = int(reading_time * (0.7 + session_engagement * 0.3))
+                    await sleep_ms(reading_time, reading_time + 1000)
 
-                    # small comment scroll
-                    if chance(0.35):
+                    # Comment scroll
+                    if chance(0.35 * session_engagement):
                         await human_scroll_wheel(page, randi(220, 700), step_range=(90, 170), pause_range=(160, 520))
 
-                    # Comment if enabled - CHỈ KHI ĐÃ LOGIN
+                    # Comment nếu enabled - CHỈ KHI ĐÃ LOGIN
                     if is_logged_in and comment:
-                        await sleep_ms(800, 1800)
-                        comment_success = await random_comment_on_video(page, username=username)
-                        if comment_success:
-                            await sleep_ms(1500, 3000)
+                        # Tỉ lệ comment giảm với fatigue
+                        comment_chance = 0.7 * (1 - fatigue_level * 0.4)
+                        if chance(comment_chance):
+                            await sleep_ms(800, 1800)
+                            comment_success = await random_comment_on_video(page, username=username)
+                            if comment_success:
+                                await sleep_ms(1500, 3000)
+                                # Comment thành công tăng engagement
+                                session_engagement = min(1.0, session_engagement + 0.08)
 
-                    # detect possible bridge navigation
+                    # Detect bridge navigation
                     has_bridge = False
                     last = page.url
                     end_time = asyncio.get_event_loop().time() + 3.0
@@ -892,17 +1217,14 @@ async def run_tiktok_flow(
                     if not has_bridge:
                         await close_exit_if_any(page)
 
-                # 3.5) Follow based on mode - CHỈ KHI ĐÃ LOGIN
-                # Tăng tỉ lệ follow lên 50%
-                if is_logged_in and follow and chance(0.50):
+                # 3.5) Follow - tỉ lệ giảm với fatigue - CHỈ KHI ĐÃ LOGIN
+                follow_chance = 0.50 * (1 - fatigue_level * 0.6)
+                if is_logged_in and follow and chance(follow_chance):
                     await sleep_ms(1000, 2500)
 
                     target_to_follow = None
 
-                    # Xác định target dựa trên follow mode
                     if follow_mode == "random":
-                        # Random mode: Follow ngẫu nhiên từ video hiện tại (author)
-                        # Lấy username từ video đang xem
                         try:
                             author_link = page.locator('a[data-e2e="video-author-uniqueid"]').first
                             if await author_link.count() > 0:
@@ -914,7 +1236,6 @@ async def run_tiktok_flow(
                             print(f"⚠️ [{username}] Cannot get random author: {e}")
 
                     elif follow_mode == "mutual":
-                        # Mutual mode: Follow ngẫu nhiên một profile khác trong list (không phải chính mình)
                         if all_usernames and len(all_usernames) > 1:
                             other_users = [u for u in all_usernames if u != username]
                             if other_users:
@@ -922,12 +1243,10 @@ async def run_tiktok_flow(
                                 print(f"🔄 [{username}] Mutual mode: Following {target_to_follow}")
 
                     elif follow_mode == "target":
-                        # Target mode: Follow user được chỉ định từ input
                         if follow_target:
                             target_to_follow = follow_target
                             print(f"🎯 [{username}] Target mode: Following {target_to_follow}")
 
-                    # Thực hiện follow nếu có target
                     if target_to_follow:
                         follow_success = await visit_target_pivot_and_follow(
                             page,
@@ -936,7 +1255,7 @@ async def run_tiktok_flow(
                         )
                         if follow_success:
                             await sleep_ms(1500, 3000)
-                            # Sau khi follow, quay về /foryou
+                            # Quay về /foryou
                             try:
                                 await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=60000)
                                 try:
@@ -953,38 +1272,50 @@ async def run_tiktok_flow(
                     else:
                         print(f"⚠️ [{username}] No target to follow in mode: {follow_mode}")
 
-            # 4) sometimes visit author profile and interact
-            if chance(0.18):
-                await sleep_ms(900, 2600)
-                ok = await click_author_avatar_if_any(page)
-                if ok:
-                    # Đợi page load sau khi click vào avatar
-                    try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=60000)
-                        await sleep_ms(1000, 2000)
-                    except Exception:
-                        pass
+                # 4) Profile visit - giảm với fatigue
+                if chance(0.18 * (1 - fatigue_level * 0.7)):
+                    await sleep_ms(900, 2600)
+                    ok = await click_author_avatar_if_any(page)
+                    if ok:
+                        try:
+                            await page.wait_for_load_state("domcontentloaded", timeout=60000)
+                            await sleep_ms(1000, 2000)
+                        except Exception:
+                            pass
 
-                    await close_profile_share_modal_if_any(page)
-                    await sleep_ms(800, 2200)
-                    await random_interact_in_profile(page, username=username, is_logged_in=is_logged_in)
-                    await sleep_ms(700, 2000)
+                        await close_profile_share_modal_if_any(page)
+                        await sleep_ms(800, 2200)
+                        await random_interact_in_profile(page, username=username, is_logged_in=is_logged_in)
+                        await sleep_ms(700, 2000)
 
-            # 5) go next video: ONE space, with a tiny pause after
-            await page.keyboard.press("Space")
-            await sleep_ms(900, 2400)
+                # 5) Next video - với pause phụ thuộc fatigue
+                # High fatigue = pause lâu hơn trước next
+                base_pause = 900 + int(fatigue_level * 1500)
+                await page.keyboard.press("Space")
+                await sleep_ms(base_pause, base_pause + 1500)
 
-            # optional: rare "fast swipe streak" (still human-ish) using press_space_n
-            if chance(0.06):
-                await press_space_n(
-                    page,
-                    randi(1, 2),
-                    delay_min_ms=400,
-                    delay_max_ms=1300,
-                    watch_min_ms=2200,
-                    watch_max_ms=6500,
-                    humanize=True,
-                )
+                # 6) Fatigue break - khi fatigue cao, đôi khi nghỉ dài
+                if fatigue_level > 0.6 and chance(0.15):
+                    print(f"😴 [{username}] Taking fatigue break...")
+                    await sleep_ms(5000, 12000)
+                    # Reset fatigue một phần
+                    fatigue_level = max(0.3, fatigue_level - 0.4)
+                    session_engagement = random.uniform(0.5, 0.8)
+
+                # 7) Rare fast swipe streak - chỉ khi engagement thấp hoặc fatigue cao
+                if chance(0.06) and (fatigue_level > 0.5 or session_engagement < 0.5):
+                    print(f"⚡ [{username}] Fast swipe streak (bored/tired)")
+                    await press_space_n(
+                        page,
+                        randi(2, 4),
+                        delay_min_ms=400,
+                        delay_max_ms=1300,
+                        watch_min_ms=1500,  # Ngắn hơn bình thường
+                        watch_max_ms=4000,
+                        humanize=True,
+                    )
+                    # Fast swipe tăng fatigue
+                    fatigue_level = min(1.0, fatigue_level + 0.15)
     finally:
         await stop_popup_watcher(watcher)
 

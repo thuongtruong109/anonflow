@@ -34,7 +34,7 @@ def simulate_check_login(has_login_button: bool, username: str):
     if has_login_button:
         # Tìm thấy login button -> chưa đăng nhập
         print(f"⚠️  Found login button for user: {username}")
-        if username and username != "unknown":
+        if username and username != "":
             _log_action("login.log", username, "https://www.tiktok.com/foryou", "Login status: false")
         return False
     else:
@@ -46,7 +46,7 @@ def simulate_like_action(is_logged_in: bool, username: str):
     """Simulate like action with login check"""
     if is_logged_in:
         print(f"   → Like action EXECUTED for {username}")
-        if username and username != "unknown":
+        if username and username != "":
             _log_action("like.log", username, "https://tiktok.com/@user/video/123", "Liked video")
     else:
         print(f"   → Like action SKIPPED (not logged in)")
@@ -55,7 +55,7 @@ def simulate_comment_action(is_logged_in: bool, username: str):
     """Simulate comment action with login check"""
     if is_logged_in:
         print(f"   → Comment action EXECUTED for {username}")
-        if username and username != "unknown":
+        if username and username != "":
             _log_action("comment.log", username, "https://tiktok.com/@user/video/456", "Commented: Great!")
     else:
         print(f"   → Comment action SKIPPED (not logged in)")
@@ -90,11 +90,11 @@ if __name__ == "__main__":
     simulate_other_actions()
     print()
 
-    # Test case 3: User CHƯA login với unknown username
+    # Test case 3: User CHƯA login với  username
     print("=" * 60)
-    print("Test 3: Unknown user CHƯA LOGIN")
+    print("Test 3: user CHƯA LOGIN")
     print("=" * 60)
-    username = "unknown"
+    username = ""
     is_logged_in = simulate_check_login(has_login_button=True, username=username)
     simulate_like_action(is_logged_in, username)
     simulate_comment_action(is_logged_in, username)
