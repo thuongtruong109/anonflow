@@ -6,23 +6,28 @@ from actions.cookie import import_txt_cookie
 from utils import safe_print
 from actions.behavior import run_tiktok_flow
 from actions.search import run_domain_flow
+import config
 
 Job = Tuple[str, str, str]  # (profile_name, addr, cookie)
 
-async def _wait_cdp_http_ready(http_base: str, retries: int = 25, delay: float = 0.5) -> bool:
+async def _wait_cdp_http_ready(http_base: str, retries: int = 120, delay: float = 1.0) -> bool:
+    """Wait for CDP connection to be ready. Increased retries from 60 to 120 (2 minutes)"""
     url = http_base.rstrip("/") + "/json/version"
 
     def _try_once() -> bool:
         try:
-            rr = requests.get(url, timeout=3)
+            rr = requests.get(url, timeout=5)
             return rr.status_code == 200
         except Exception:
             return False
 
-    for _ in range(retries):
+    for i in range(retries):
         ok = await asyncio.to_thread(_try_once)
         if ok:
             return True
+        # Log progress every 15 seconds to show it's still trying
+        if i > 0 and i % 15 == 0:
+            safe_print(f"⏳ Still waiting for CDP connection... ({i}/{retries} seconds)")
         await asyncio.sleep(delay)
     return False
 
@@ -32,12 +37,17 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             safe_print(f"❌ [{name}] Missing addr")
             return
 
+        safe_print(f"⏳ [{name}] Waiting for CDP connection: {addr}")
         ok = await _wait_cdp_http_ready(addr)
         if not ok:
-            safe_print(f"❌ [{name}] CDP not ready (timeout): {addr}")
+            safe_print(f"❌ [{name}] CDP not ready (timeout after 120 seconds): {addr}")
+            safe_print(f"💡 Tip: This profile might be slow to start. Try:")
+            safe_print(f"   - Reduce START_LIMIT (current: {config.START_LIMIT})")
+            safe_print(f"   - Close other profiles to free resources")
+            safe_print(f"   - Check if GPM is overloaded")
             return
         browser = await p.chromium.connect_over_cdp(addr)
-        safe_print(f"✅ [{name}] Connected to CDP HTTP: {addr}")
+        safe_print(f"✅ [{name}] Connected to CDP: {addr}")
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
 
@@ -45,13 +55,14 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
 
         if actions.get("import"):
             try:
+                safe_print(f"🍪 [{name}] Starting cookie import...")
                 browser = await p.chromium.connect_over_cdp(addr)
                 context = browser.contexts[0]
                 page = await context.new_page()
                 await import_txt_cookie(page, name, cookie)
-                safe_print(f"✅ Imported cookie for {name}")
+                safe_print(f"✅ [{name}] Imported cookies successfully")
             except Exception as e:
-                safe_print(f"❌ Import failed for {name}: {e}")
+                safe_print(f"❌ [{name}] Import failed: {e}")
 
         # Run behavior actions if pw mode is enabled (CDP mode)
         if actions.get("pw"):
@@ -64,17 +75,21 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
 
                 try:
                     safe_print(f"🚀 [{name}] Calling run_domain_flow()...")
+                    # Increased timeout: search_time * 60 + 5 minutes buffer (instead of 1 minute)
+                    # This gives more time for slow pages, network issues, etc.
+                    timeout_seconds = (search_time * 60) + 300
+                    safe_print(f"⏱️ [{name}] Flow timeout set to {timeout_seconds//60} minutes")
                     await asyncio.wait_for(
                         run_domain_flow(
                             page,
                             username=name,
                             search_time=search_time
                         ),
-                        timeout=(search_time * 60) + 60  # Search time + 1 minute buffer
+                        timeout=timeout_seconds
                     )
                     safe_print(f"✅ [{name}] run_domain_flow() completed successfully")
                 except asyncio.TimeoutError:
-                    safe_print(f"⏱️ [{name}] run_domain_flow() TIMEOUT - moving to next profile")
+                    safe_print(f"⏱️ [{name}] run_domain_flow() TIMEOUT after {timeout_seconds//60} minutes - moving to next profile")
                 except Exception as flow_error:
                     safe_print(f"❌ [{name}] run_domain_flow() error: {flow_error}")
                     import traceback
@@ -98,7 +113,9 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
                     try:
                         safe_print(f"🚀 [{name}] Calling run_tiktok_flow()...")
                         # Set timeout cho toàn bộ flow để tránh treo vô tận
-                        # Mỗi profile có tối đa 20 phút để hoàn thành tất cả behavior actions
+                        # Increased from 20 to 30 minutes for more reliability
+                        timeout_seconds = 1800  # 30 phút
+                        safe_print(f"⏱️ [{name}] Flow timeout set to {timeout_seconds//60} minutes")
                         await asyncio.wait_for(
                             run_tiktok_flow(
                                 page,
@@ -112,11 +129,11 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
                                 follow_target=actions.get("follow_target"),
                                 all_usernames=actions.get("all_usernames"),
                             ),
-                            timeout=1200  # 20 phút timeout
+                            timeout=timeout_seconds
                         )
                         safe_print(f"✅ [{name}] run_tiktok_flow() completed successfully")
                     except asyncio.TimeoutError:
-                        safe_print(f"⏱️ [{name}] run_tiktok_flow() TIMEOUT after 20 minutes - moving to next profile")
+                        safe_print(f"⏱️ [{name}] run_tiktok_flow() TIMEOUT after {timeout_seconds//60} minutes - moving to next profile")
                     except Exception as flow_error:
                         safe_print(f"❌ [{name}] run_tiktok_flow() error: {flow_error}")
                         import traceback

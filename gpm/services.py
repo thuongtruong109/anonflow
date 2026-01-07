@@ -68,7 +68,12 @@ def update_profile(pid: str, proxy: str):
     return r
 
 def start_profile(pid: str, index: int, total_profiles: int = None) -> str:
+    import time
     with config.start_sem:
+        # Add small delay between starts to reduce API overload (except for first profile)
+        if index > 1:
+            time.sleep(0.5)  # 500ms delay between profile starts
+
         win_info = compute_win_pos(index, total_profiles)
         parts = win_info.split(",")
 

@@ -103,7 +103,7 @@ class ModernButton(QPushButton):
                 color: white;
                 border: none;
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: 6px 10px;
                 text-align: left;
             }}
             QPushButton:hover {{
@@ -147,7 +147,7 @@ class GPMMainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Anonflow")
-        self.setMinimumSize(1100, 750)
+        self.setMinimumSize(800, 750)
 
         self.apply_dark_theme()
 
@@ -155,26 +155,29 @@ class GPMMainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         # Top row: Header + Settings (left) and Tasks (right) with 3:7 ratio
         top_row_layout = QHBoxLayout()
-        top_row_layout.setSpacing(10)
+        top_row_layout.setSpacing(6)
 
         # Left column (30%): Header + Threads/Start Limit
         left_column = QVBoxLayout()
-        left_column.setSpacing(10)
+        left_column.setSpacing(6)
         left_column.addWidget(self.create_header())
         left_column.addWidget(self.create_quick_settings())
 
         # Create a widget to hold the left column
         left_widget = QWidget()
         left_widget.setLayout(left_column)
+        left_widget.setMinimumWidth(260)  # Fixed minimum width for quick settings
+        left_widget.setMaximumWidth(260)  # Maximum width limit
 
-        # Add to top row with ratio 2:8
-        top_row_layout.addWidget(left_widget, 2)
-        top_row_layout.addWidget(self.create_config_section(), 8)  # Excel Data Preview
+        # Add to top row - proxy settings will take remaining space
+        top_row_layout.addWidget(left_widget)
+        proxy_widget = self.create_config_section()
+        top_row_layout.addWidget(proxy_widget)
         layout.addLayout(top_row_layout)
 
         # Main splitter
@@ -183,16 +186,15 @@ class GPMMainWindow(QMainWindow):
         # Top section: Tasks
         top_widget = QWidget()
         top_layout = QHBoxLayout(top_widget)
-        top_layout.setSpacing(10)
-        top_layout.addWidget(self.create_behavior_actions_section(), 1)
+        top_layout.addWidget(self.create_behavior_actions_section(), 1.5)
 
         # Right column: Cookie Setting above Automation Tasks
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(6)
         right_layout.addWidget(self.create_cookie_setting_section())
         right_layout.addWidget(self.create_tasks_section())
-        top_layout.addWidget(right_widget, 2)
+        top_layout.addWidget(right_widget, 1.5)
 
         splitter.addWidget(top_widget)
 
@@ -213,8 +215,8 @@ class GPMMainWindow(QMainWindow):
             QGroupBox {
                 border: 2px solid #2196F3;
                 border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
+                margin-top: 6px;
+                padding-top: 6px;
                 font-weight: bold;
                 font-size: 10pt;
             }
@@ -229,7 +231,7 @@ class GPMMainWindow(QMainWindow):
                 color: #00ff00;
                 border: 2px solid #2196F3;
                 border-radius: 6px;
-                padding: 8px;
+                padding: 6px;
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 9pt;
                 selection-background-color: #2196F3;
@@ -300,20 +302,21 @@ class GPMMainWindow(QMainWindow):
 
     def create_header(self):
         frame = QFrame()
+        frame.setMaximumHeight(70)
         frame.setStyleSheet("""
             QFrame {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #1a237e, stop:1 #2196F3);
                 border-radius: 8px;
-                padding: 8px 12px;
+                padding: 2px 4px;
             }
         """)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        title = QLabel("🚀 GPM Automation Suite")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        title = QLabel("🚀 GPM Automation")
+        title.setFont(QFont("Segoe UI", 12, QFont.Bold))
         title.setStyleSheet("color: white;")
 
         subtitle = QLabel("TikTok Profile & Cookie Management")
@@ -328,8 +331,8 @@ class GPMMainWindow(QMainWindow):
         """Create quick settings section for Threads and Start Limit"""
         group = QGroupBox("⚙️ Quick Settings")
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         # Threads and Start Limit on same row
         settings_layout = QHBoxLayout()
@@ -435,8 +438,8 @@ class GPMMainWindow(QMainWindow):
 
         main_layout.addWidget(self.proxies_text)
 
-        # Bottom: Action buttons
-        buttons_layout = QHBoxLayout()
+        # Bottom: Action buttons (2x2 grid)
+        buttons_layout = QGridLayout()
         buttons_layout.setSpacing(8)
 
         create_profiles_btn = ModernButton("Create Profiles", "➕", "#2196F3")
@@ -448,17 +451,13 @@ class GPMMainWindow(QMainWindow):
         view_btn = ModernButton("View File", "📊", "#9C27B0")
         view_btn.clicked.connect(self.view_excel_file)
 
-        reload_btn = ModernButton("Reload", "🔄", "#FF9800")
-        reload_btn.clicked.connect(self.load_excel_data)
-
         save_btn = ModernButton("Save Changes", "💾", "#4CAF50")
         save_btn.clicked.connect(self.save_proxies_to_excel)
 
-        buttons_layout.addWidget(create_profiles_btn)
-        buttons_layout.addWidget(update_proxies_btn)
-        buttons_layout.addWidget(view_btn)
-        buttons_layout.addWidget(reload_btn)
-        buttons_layout.addWidget(save_btn)
+        buttons_layout.addWidget(create_profiles_btn, 0, 0)
+        buttons_layout.addWidget(update_proxies_btn, 0, 1)
+        buttons_layout.addWidget(view_btn, 1, 0)
+        buttons_layout.addWidget(save_btn, 1, 1)
 
         main_layout.addLayout(buttons_layout)
 
@@ -471,6 +470,8 @@ class GPMMainWindow(QMainWindow):
     def create_tasks_section(self):
         group = QGroupBox("📋 Tasks")
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -511,7 +512,7 @@ class GPMMainWindow(QMainWindow):
 
         # Create and add stop button first (will be positioned next to Start Profiles)
         self.stop_btn = ModernButton("🛑  Stop Tasks", "", "#F44336")
-        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setMinimumHeight(32)
         self.stop_btn.setFont(QFont("Segoe UI", 9))
         self.stop_btn.clicked.connect(self.stop_tasks)
         self.stop_btn.setEnabled(False)  # Disabled by default
@@ -519,7 +520,7 @@ class GPMMainWindow(QMainWindow):
         for i, (name, icon, idx, has_options, color) in enumerate(tasks):
             # Create task item container (remove wrapper, just use button directly)
             button = ModernButton(f"{icon}  {name}", "", color)
-            button.setMinimumHeight(40)
+            button.setMinimumHeight(32)
             button.setFont(QFont("Segoe UI", 9))
 
             # Add arrow button if task has options
@@ -1496,8 +1497,8 @@ class GPMMainWindow(QMainWindow):
         layout.setSpacing(8)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Cookie buttons row
-        cookie_buttons_layout = QHBoxLayout()
+        # Cookie buttons grid (2x2)
+        cookie_buttons_layout = QGridLayout()
         cookie_buttons_layout.setSpacing(6)
 
         view_cookie_btn = ModernButton("View files", "📂", "#9C27B0")
@@ -1516,10 +1517,10 @@ class GPMMainWindow(QMainWindow):
         import_profile_btn.setMinimumHeight(32)
         import_profile_btn.clicked.connect(self.import_cookies_to_profiles)
 
-        cookie_buttons_layout.addWidget(view_cookie_btn)
-        cookie_buttons_layout.addWidget(upload_cookie_btn)
-        cookie_buttons_layout.addWidget(update_list_btn)
-        cookie_buttons_layout.addWidget(import_profile_btn)
+        cookie_buttons_layout.addWidget(view_cookie_btn, 0, 0)
+        cookie_buttons_layout.addWidget(upload_cookie_btn, 0, 1)
+        cookie_buttons_layout.addWidget(update_list_btn, 1, 0)
+        cookie_buttons_layout.addWidget(import_profile_btn, 1, 1)
 
         layout.addLayout(cookie_buttons_layout)
 
@@ -1797,14 +1798,14 @@ class GPMMainWindow(QMainWindow):
             # Extract proxies (column B only)
             proxies_list = []
 
-            for i, row in enumerate(rows, 1):
+            for row in rows:
                 if len(row) >= 3:
                     # row is (profile_name, cookie_path, proxy)
                     proxy = row[2] if row[2] else ""    # proxy is at index 2
-                    proxies_list.append(f"{i}. {proxy}")
+                    proxies_list.append(proxy)
 
             # Update text area
-            proxies_text = "\n\n".join(proxies_list) if proxies_list else "⚠️ No proxies found"
+            proxies_text = "\n".join(proxies_list) if proxies_list else "⚠️ No proxies found"
             self.proxies_text.setPlainText(proxies_text)
 
             if hasattr(self, 'terminal'):
@@ -1864,28 +1865,12 @@ class GPMMainWindow(QMainWindow):
             text_content = self.proxies_text.toPlainText()
             lines = text_content.strip().split('\n')
 
-            # Parse proxies from text (format: "1. proxy_address")
+            # Parse proxies from text - each line is a proxy
             proxies_list = []
             for line in lines:
                 line = line.strip()
-                if line:
-                    # More flexible parsing: split on first '.' and take the rest as proxy
-                    if '.' in line:
-                        parts = line.split('.', 1)
-                        if len(parts) == 2:
-                            index_str = parts[0].strip()
-                            proxy = parts[1].strip()
-                            try:
-                                index = int(index_str)
-                                proxies_list.append(proxy)
-                            except ValueError:
-                                # If not a number, treat the whole line as proxy
-                                proxies_list.append(line)
-                        else:
-                            proxies_list.append(line)
-                    else:
-                        # If no number, treat the whole line as proxy
-                        proxies_list.append(line)
+                if line and not line.startswith('⚠️'):
+                    proxies_list.append(line)
 
             # Allow saving empty list (clears all proxies)
             wb = load_workbook(excel_path)
