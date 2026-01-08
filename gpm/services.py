@@ -1,7 +1,27 @@
-from config import profile_cache, cache_lock, started_debug_addrs, started_lock, GROUP_NAME, BROWSER_CORE, BROWSER_NAME, START_WIN_SCALE, START_WIN_SIZE
+from config import profile_cache, cache_lock, started_debug_addrs, started_lock, GROUP_NAME, BROWSER_CORE, BROWSER_NAME, START_WIN_SCALE, START_WIN_SIZE, FULL_SCREEN, SCREEN_W, SCREEN_H
 import config
 from client import api_get, api_post
 from utils import compute_win_pos
+
+def get_profiles_list() -> list:
+    """Get list of all profiles from GPM API"""
+    r = api_get("/api/v3/profiles", {
+        "page": 1,
+        "per_page": 100,  # Get more profiles
+        "sort": 2
+    })
+
+    profiles = []
+    for profile in r.get("data", []):
+        profiles.append({
+            "id": profile.get("id"),
+            "name": profile.get("name"),
+            "group": profile.get("group_name", ""),
+            "browser": profile.get("browser_name", ""),
+            "status": profile.get("status", "unknown")
+        })
+
+    return profiles
 
 def create_profile(name: str, proxy: str) -> str:
     with cache_lock:
@@ -86,6 +106,10 @@ def start_profile(pid: str, index: int, total_profiles: int = None) -> str:
             # Format cũ: x,y (fallback)
             params["win_pos"] = win_info
             params["win_size"] = START_WIN_SIZE
+
+        # Override with full screen if enabled
+        if FULL_SCREEN:
+            params["win_size"] = f"{SCREEN_W},{SCREEN_H}"
 
         if START_WIN_SCALE is not None:
             params["win_scale"] = START_WIN_SCALE

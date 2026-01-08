@@ -6,3 +6,5 @@ data
 profiles
 storage_state
 references.md
+build
+dist

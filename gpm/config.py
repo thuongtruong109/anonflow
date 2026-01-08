@@ -14,14 +14,14 @@ pw_jobs_lock = threading.Lock()
 
 start_sem = None
 
-EXCEL_PATH = "data/proxies.xlsx"
+EXCEL_PATH = "data/profiles.xlsx"
 COOKIES_DIR = "data/cookies"
 EXTENSIONS_DIR = "data/extensions"
 COOKIE_IMPORTER_EXTENSION_ID = "kndjfojeoamnpbehojpbflmnleahimkb"
 GPM_EXTENSION_LOCATE = "C://Users/admin/Documents/GPMLogin/GlobalExt"
 
 THREADS = 6
-START_LIMIT = 5
+START_LIMIT = 3
 REQUEST_TIMEOUT = 60
 
 GPM_API = "http://127.0.0.1:19995"
@@ -37,6 +37,8 @@ COLS = 4
 
 START_WIN_SCALE = None
 START_WIN_SIZE = "468,350"
+
+FULL_SCREEN = False
 
 def _safe_reconfigure_stdout_utf8():
     try:
@@ -88,7 +90,7 @@ def setup_logger(
 
     if console:
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.WARNING)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 

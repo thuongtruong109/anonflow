@@ -3,13 +3,10 @@
 block_cipher = None
 
 a = Analysis(
-    ['gui.py'],
+    ['index.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('data', 'data'),
-        ('actions', 'actions'),
-    ],
+    datas=[],
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
@@ -38,27 +35,25 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='GPM_Automation',
+    name='app',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # GUI mode - no console window
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add your icon here: 'icon.ico'
+    icon='data/icon.png',
 )
 
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    name='GPM_Automation',
+    name='anonflow',
 )

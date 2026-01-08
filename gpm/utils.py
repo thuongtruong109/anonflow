@@ -102,16 +102,15 @@ def list_filepaths(folder: str, base: str = ".") -> List[str]:
     files.sort(key=lambda p: os.path.basename(p).lower())
     return files
 
-import unicodedata
-
 def normalize_ext(s: str) -> str:
+    import unicodedata
     s = unicodedata.normalize("NFKC", s)
     s = s.casefold()
     s = s.replace("ı", "i")
 
     s = "".join(
         c for c in s
-        if unicodedata.category(c)[0] != "C"
+        if unicodedata.category(c) not in ("Mn", "Cf", "Cc")
     )
 
     return s
