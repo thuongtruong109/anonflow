@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QGroupBox, QGridLayout, QMessageBox,
     QFileDialog, QSplitter, QFrame, QLineEdit, QSpinBox, QCheckBox,
-    QScrollArea, QRadioButton, QSizePolicy, QTabWidget, QListWidget, QListWidgetItem
+    QScrollArea, QRadioButton, QSizePolicy, QTabWidget, QListWidget, QListWidgetItem,
+    QAbstractItemView
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QFont, QTextCursor
@@ -14,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from excel import update_excel_column_a_with_cookie_files, read_excel
-from services import create_profile, start_profile, close_profile, delete_profile, get_profiles_list
+from services import create_profile, start_profile, close_profile, delete_profile, get_profiles_list, get_debug_addr, get_profile_id, remember_debug_addr
 from runner import run_all_playwright
 from utils import safe_print
 from handler import process_row
@@ -136,6 +137,7 @@ class ModernButton(QPushButton):
 class ProfileListItem(QWidget):
     """Custom widget for profile list items with name and delete button"""
     delete_clicked = Signal(str, str)  # profile_id, profile_name
+    close_clicked = Signal(str, str)  # profile_id, profile_name
 
     def __init__(self, profile_name, profile_id):
         super().__init__()
@@ -152,18 +154,22 @@ class ProfileListItem(QWidget):
         self.name_label.setFont(QFont("Segoe UI", 9))
         self.name_label.setStyleSheet("font-weight: bold; background-color: transparent;")
 
-        # Delete button
-        self.delete_btn = ModernButton("Delete", "🗑️", "#f44336")
-        self.delete_btn.setFixedSize(70, 25)
-        self.delete_btn.clicked.connect(self.on_delete_clicked)
+        # Close button (initially hidden)
+        self.close_btn = ModernButton("Close", "⏹️", "#FF9800")
+        self.close_btn.setFixedSize(70, 25)
+        self.close_btn.setVisible(False)  # Hidden by default
+        self.close_btn.clicked.connect(self.on_close_clicked)
 
         layout.addWidget(self.name_label)
         layout.addStretch()
-        layout.addWidget(self.delete_btn)
+        layout.addWidget(self.close_btn)
 
-    def on_delete_clicked(self):
-        self.delete_clicked.emit(self.profile_id, self.profile_name)
+    def update_status(self, is_started):
+        """Show/hide close button based on profile status"""
+        self.close_btn.setVisible(is_started)
 
+    def on_close_clicked(self):
+        self.close_clicked.emit(self.profile_id, self.profile_name)
 
 class GPMMainWindow(QMainWindow):
     def __init__(self):
@@ -174,6 +180,7 @@ class GPMMainWindow(QMainWindow):
         self.task_queue = []
         self.task_options = {}
         self.stop_requested = False
+        self.selected_profiles = []  # List of selected profile IDs
         self.init_ui()
 
     def init_ui(self):
@@ -450,6 +457,8 @@ class GPMMainWindow(QMainWindow):
 
         # Profiles list widget
         self.profiles_list = QListWidget()
+        self.profiles_list.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Allow multi-select with drag
+        self.profiles_list.itemSelectionChanged.connect(self.update_selected_profiles)
         self.profiles_list.setStyleSheet("""
             QListWidget {
                 background-color: #0a0a0a;
@@ -549,6 +558,7 @@ class GPMMainWindow(QMainWindow):
         self.run_with_cdp_checkbox = QCheckBox("Run with CDP")
         self.run_with_cdp_checkbox.setChecked(True)  # Default is checked (True)
         self.run_with_cdp_checkbox.setFont(QFont("Segoe UI", 9))
+        self.run_with_cdp_checkbox.stateChanged.connect(self.on_cdp_checkbox_changed)
         self.run_with_cdp_checkbox.setStyleSheet("""
             QCheckBox {
                 color: #ffffff;
@@ -1775,6 +1785,13 @@ class GPMMainWindow(QMainWindow):
         if hasattr(self, 'terminal'):
             self.log(f"🖥️ Full screen mode: {'Enabled' if config.FULL_SCREEN else 'Disabled'}")
 
+    @Slot(int)
+    def on_cdp_checkbox_changed(self, state):
+        if state == 2:  # Checked
+            self.log("✅ CDP mode enabled - Behavior actions will work")
+        else:  # Unchecked
+            self.log("⚠️ CDP mode disabled - Only profile start/close will work")
+
     @Slot()
     def view_cookie_folder(self):
         try:
@@ -1964,12 +1981,28 @@ class GPMMainWindow(QMainWindow):
                 # Create custom widget for profile item
                 profile_item = ProfileListItem(profile['name'], profile['id'])
                 profile_item.delete_clicked.connect(self.on_delete_profile)
+                profile_item.close_clicked.connect(self.on_close_profile)
+
+                # Check if profile is started
+                try:
+                    addr = get_debug_addr(profile['name'])
+                    is_started = addr is not None
+                except Exception as e:
+                    is_started = False
+                    if hasattr(self, 'terminal'):
+                        self.log(f"⚠️ Could not check status for {profile['name']}: {e}")
+
+                profile_item.update_status(is_started)
 
                 # Create list widget item and set the custom widget
                 list_item = QListWidgetItem()
                 list_item.setSizeHint(profile_item.sizeHint())
                 self.profiles_list.addItem(list_item)
                 self.profiles_list.setItemWidget(list_item, profile_item)
+
+            # Select all items by default
+            self.profiles_list.selectAll()
+            self.update_selected_profiles()
 
             if hasattr(self, 'terminal'):
                 self.log(f"✅ Loaded {len(profiles)} profiles from GPM")
@@ -1982,6 +2015,17 @@ class GPMMainWindow(QMainWindow):
             self.profiles_list.addItem(item)
             if hasattr(self, 'terminal'):
                 self.log(error_msg)
+
+    def update_selected_profiles(self):
+        """Update the list of selected profile names"""
+        self.selected_profiles = []
+        for item in self.profiles_list.selectedItems():
+            widget = self.profiles_list.itemWidget(item)
+            if widget:
+                self.selected_profiles.append(widget.profile_name)
+        # Optional: log the count
+        if hasattr(self, 'terminal'):
+            self.log(f"📋 Selected {len(self.selected_profiles)} profiles")
 
     def on_delete_profile(self, profile_id, profile_name):
         """Handle profile deletion"""
@@ -2022,6 +2066,26 @@ class GPMMainWindow(QMainWindow):
                     "Delete Failed",
                     f"Failed to delete profile '{profile_name}'.\n\nError: {str(e)}"
                 )
+
+    def on_close_profile(self, profile_id, profile_name):
+        """Handle profile close"""
+        try:
+            # Close profile
+            close_profile(profile_id)
+            self.log(f"✅ Closed profile: {profile_name}")
+
+            # Refresh the profiles list to update button visibility
+            self.refresh_profiles_list()
+
+        except Exception as e:
+            error_msg = f"❌ Failed to close profile '{profile_name}': {str(e)}"
+            if hasattr(self, 'terminal'):
+                self.log(error_msg)
+            QMessageBox.critical(
+                self,
+                "Error",
+                error_msg
+            )
 
     @Slot()
     def view_excel_file(self):
@@ -2123,63 +2187,44 @@ class GPMMainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.terminal.append(f"[{timestamp}] {message}")
 
-    def run_single_task(self, task_name, task_icon, task_index):
-        if self.current_worker and self.current_worker.isRunning():
-            self.log(f"⚠️ Another task is running. Please wait...")
-            return
+    def _start_selected_profile(self, profile_name, pid, index, total_profiles, actions):
+        """Start a single selected profile from GUI"""
+        try:
+            with config.start_sem:
+                # Check if already started
+                existing_addr = get_debug_addr(profile_name)
+                if existing_addr:
+                    addr = existing_addr
+                    safe_print(f"✅ Reusing existing connection for {profile_name} -> {addr}")
+                else:
+                    addr = start_profile(pid, index, total_profiles)
+                    safe_print(f"✅ Started {profile_name} -> {addr}")
+                    remember_debug_addr(profile_name, addr)
 
-        # Reset stop flag
-        self.stop_requested = False
+                # Add to playwright jobs if needed
+                if (actions["import"] or actions["pw"]) and addr:
+                    with config.pw_jobs_lock:
+                        # For GUI-selected profiles, no cookie file
+                        config.pw_jobs.append((profile_name, addr, ""))
 
-        # Update stop button state (if it exists)
-        if hasattr(self, 'stop_btn'):
-            self.stop_btn.setEnabled(True)
+        except Exception as e:
+            safe_print(f"❌ {profile_name}: {e}")
 
-        # Build actions dictionary for this single task
-        actions = {
-            "handle_cookies": False,
-            "create": False,
-            "start": False,
-            "pw": False,
-            "import": False,
-            "close": False,
-            "delete": False,
-            "follow": False,
-            "like_video": False,
-            "comment": False,
-            "view_video": False,
-        }
+    def _close_selected_profile(self, profile_name, pid):
+        """Close a single selected profile from GUI"""
+        try:
+            close_profile(pid)
+            safe_print(f"✅ Closed {profile_name}")
+        except Exception as e:
+            safe_print(f"❌ Failed to close {profile_name}: {e}")
 
-        # Map task name to actions
-        if task_name == "Start Profiles":
-            actions["start"] = True
-            # Check the "Run with CDP" checkbox to determine mode
-            if hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked():
-                actions["pw"] = True
-        elif task_name == "Close Profiles":
-            actions["close"] = True
-        elif task_name == "Delete Profiles":
-            actions["delete"] = True
-        elif task_name == "Follow":
-            actions["follow"] = True
-            actions["start"] = True
-        elif task_name == "Like video":
-            actions["like_video"] = True
-            actions["start"] = True
-        elif task_name == "Comment":
-            actions["comment"] = True
-            actions["start"] = True
-        elif task_name == "View video":
-            actions["view_video"] = True
-            actions["start"] = True
-
-        # Log the task being run
-        self.log(f"\n{'='*70}")
-        self.log(f"🚀 Running task: {task_icon} {task_name}")
-        self.log(f"{'='*70}\n")
-
-        # Run the task
-        self.run_tasks_with_actions(actions)
+    def _delete_selected_profile(self, profile_name, pid):
+        """Delete a single selected profile from GUI"""
+        try:
+            delete_profile(pid)
+            safe_print(f"🗑️ Deleted {profile_name}")
+        except Exception as e:
+            safe_print(f"❌ Failed to delete {profile_name}: {e}")
 
     def run_single_task(self, task_name, task_icon, task_index):
         """Run a single automation task immediately"""
@@ -2216,9 +2261,6 @@ class GPMMainWindow(QMainWindow):
         # Map task name to actions
         if task_name == "Start Profiles":
             actions["start"] = True
-            # Check the "Run with CDP" checkbox to determine mode
-            if hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked():
-                actions["pw"] = True
         elif task_name == "Close Profiles":
             actions["close"] = True
         elif task_name == "Delete Profiles":
@@ -2229,6 +2271,11 @@ class GPMMainWindow(QMainWindow):
         if task_name == "Start Profiles":
             # Determine if we're in CDP mode based on checkbox
             is_cdp_mode = hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked()
+
+            # QUAN TRỌNG: Enable pw mode nếu CDP checkbox được check
+            # pw mode = CDP connection mode, cần thiết để control browser qua Playwright
+            if is_cdp_mode:
+                actions["pw"] = True
 
             # Check behavior mode (Tiktok or Search)
             behavior_mode = "tiktok" if self.tiktok_radio.isChecked() else "search"
@@ -2271,15 +2318,8 @@ class GPMMainWindow(QMainWindow):
                         elif name == "Comment":
                             actions["comment"] = True
 
-            # CHỈ enable pw mode nếu:
-            # 1. Đang ở CDP mode (checkbox checked)
-            # 2. VÀ có ít nhất một behavior action được chọn (tiktok mode) HOẶC search mode được chọn
-            if is_cdp_mode:
-                has_behavior_actions = actions["follow"] or actions["like_video"] or actions["comment"] or actions["view_video"]
-                if has_behavior_actions or behavior_mode == "search":
-                    actions["pw"] = True
-            else:
-                # Nếu ở launch mode mà có behavior actions được chọn, cảnh báo user
+            # Warning nếu ở launch mode mà có behavior actions được chọn
+            if not is_cdp_mode:
                 has_behavior_actions = actions["follow"] or actions["like_video"] or actions["comment"] or actions["view_video"]
                 if has_behavior_actions or behavior_mode == "search":
                     self.log("⚠️ WARNING: Behavior actions và Search mode chỉ hoạt động với CDP mode!")
@@ -2324,79 +2364,141 @@ class GPMMainWindow(QMainWindow):
 
     def run_tasks_with_actions(self, actions, task_name="Tasks"):
         """Run tasks using CLI logic with ThreadPoolExecutor"""
+
+        # Create worker reference for stop checking
+        worker = None
+
         def run():
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            import threading
+            try:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import threading
 
-            # Check if stop was requested
-            if self.stop_requested or (self.current_worker and self.current_worker.is_stopped()):
-                safe_print("⏹️ Task execution stopped by user")
-                return
+                # Initialize semaphore for start limit
+                config.start_sem = threading.Semaphore(config.START_LIMIT)
 
-            # Initialize semaphore for start limit
-            config.start_sem = threading.Semaphore(config.START_LIMIT)
+                # Clear previous state
+                with config.started_lock:
+                    config.started_debug_addrs.clear()
 
-            # Clear previous state
-            with config.started_lock:
-                config.started_debug_addrs.clear()
-
-            with config.pw_jobs_lock:
-                config.pw_jobs.clear()
-
-            # Read excel data
-            rows = read_excel()
-
-            # Calculate total profiles for dynamic grid
-            total_profiles = len(rows) if (actions["start"] or actions["import"] or actions["pw"]) else None
-
-            # Execute with thread pool (same as CLI)
-            with ThreadPoolExecutor(max_workers=config.THREADS) as ex:
-                futures = [
-                    ex.submit(process_row, *row[:3], i+1, actions, total_profiles)
-                    for i, row in enumerate(rows)
-                ]
-                for future in as_completed(futures):
-                    # Check stop request periodically
-                    if self.stop_requested or (self.current_worker and self.current_worker.is_stopped()):
-                        safe_print("⏹️ Stopping task execution...")
-                        # Cancel remaining futures
-                        for f in futures:
-                            f.cancel()
-                        ex.shutdown(wait=False)
-                        return
-
-            # Check before running playwright jobs
-            if self.stop_requested or (self.current_worker and self.current_worker.is_stopped()):
-                safe_print("⏹️ Task execution stopped before Playwright jobs")
-                return
-
-            # Run playwright jobs if needed
-            if actions["import"] or actions["pw"]:
                 with config.pw_jobs_lock:
-                    jobs = config.pw_jobs.copy()
+                    config.pw_jobs.clear()
 
-                if not jobs:
-                    safe_print("⚠️ No playwright jobs collected.")
+                # Check if we should use selected profiles from GUI (áp dụng cho TẤT CẢ actions)
+                use_selected_profiles = (
+                    hasattr(self, 'selected_profiles') and
+                    self.selected_profiles and
+                    len(self.selected_profiles) > 0
+                )
+
+                if use_selected_profiles:
+                    # Use selected profiles from GUI (GPM API profiles)
+                    safe_print(f"� Starting {len(self.selected_profiles)} selected profiles from GUI")
+
+                    # Get profile IDs from profile names
+                    profile_ids_to_start = []
+                    for profile_name in self.selected_profiles:
+                        try:
+                            pid = get_profile_id(profile_name)
+                            profile_ids_to_start.append((profile_name, pid))
+                        except Exception as e:
+                            safe_print(f"❌ Failed to get ID for profile {profile_name}: {e}")
+
+                    # Start profiles without Excel data (no cookie import)
+                    total_profiles = len(profile_ids_to_start)
+
+                    with ThreadPoolExecutor(max_workers=config.THREADS) as ex:
+                        futures = []
+                        for i, (profile_name, pid) in enumerate(profile_ids_to_start, 1):
+                            if actions["start"]:
+                                # Start selected profile
+                                future = ex.submit(
+                                    self._start_selected_profile,
+                                    profile_name,
+                                    pid,
+                                    i,
+                                    total_profiles,
+                                    actions
+                                )
+                            elif actions["close"]:
+                                # Close selected profile
+                                future = ex.submit(self._close_selected_profile, profile_name, pid)
+                            elif actions["delete"]:
+                                # Delete selected profile
+                                future = ex.submit(self._delete_selected_profile, profile_name, pid)
+                            else:
+                                continue
+
+                            futures.append(future)
+
+                        for future in as_completed(futures):
+                            if self.stop_requested or (worker and worker.is_stopped()):
+                                safe_print("⏹️ Stopping task execution...")
+                                for f in futures:
+                                    f.cancel()
+                                ex.shutdown(wait=False)
+                                return
+
                 else:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(run_all_playwright(jobs, actions))
-                    except Exception as e:
-                        if not self.stop_requested:
-                            safe_print(f"❌ Playwright error: {e}")
-                    finally:
-                        loop.close()
+                    # Use Excel data (original flow)
+                    rows = read_excel()
+                    safe_print(f"📊 Read {len(rows)} profiles from Excel")
 
-            if not self.stop_requested and not (self.current_worker and self.current_worker.is_stopped()):
+                    # Calculate total profiles for dynamic grid
+                    total_profiles = len(rows) if (actions["start"] or actions["import"] or actions["pw"]) else None
+                    safe_print(f"🔧 Starting execution with {len(rows)} profiles, actions: start={actions['start']}, pw={actions['pw']}")
+
+                    # Execute with thread pool (same as CLI)
+                    with ThreadPoolExecutor(max_workers=config.THREADS) as ex:
+                        futures = [
+                            ex.submit(process_row, *row[:3], i+1, actions, total_profiles)
+                            for i, row in enumerate(rows)
+                        ]
+                        for future in as_completed(futures):
+                            # Check stop request periodically
+                            if self.stop_requested or (worker and worker.is_stopped()):
+                                safe_print("⏹️ Stopping task execution...")
+                                # Cancel remaining futures
+                                for f in futures:
+                                    f.cancel()
+                                ex.shutdown(wait=False)
+                                return
+
+                # Check before running playwright jobs
+                if self.stop_requested or (worker and worker.is_stopped()):
+                    safe_print("⏹️ Task execution stopped before Playwright jobs")
+                    return
+
+                # Run playwright jobs if needed
+                if actions["import"] or actions["pw"]:
+                    with config.pw_jobs_lock:
+                        jobs = config.pw_jobs.copy()
+
+                    if not jobs:
+                        safe_print("⚠️ No playwright jobs collected.")
+                    else:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(run_all_playwright(jobs, actions))
+                        except Exception as e:
+                            if not self.stop_requested:
+                                safe_print(f"❌ Playwright error: {e}")
+                        finally:
+                            loop.close()
+
                 safe_print("✅ ALL DONE")
-            else:
-                safe_print("⏹️ Tasks stopped by user")
 
-        self.current_worker = TaskWorker(task_name, run)
-        self.current_worker.log_signal.connect(self.log)
-        self.current_worker.finished_signal.connect(self.on_tasks_finished)
-        self.current_worker.start()
+            except Exception as e:
+                safe_print(f"❌ Exception in run(): {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+
+        worker = TaskWorker(task_name, run)
+        self.current_worker = worker
+        worker.log_signal.connect(self.log)
+        worker.finished_signal.connect(self.on_tasks_finished)
+        worker.start()
 
     @Slot(bool, str)
     def on_tasks_finished(self, success, message):

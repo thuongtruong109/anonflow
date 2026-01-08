@@ -32,6 +32,10 @@ async def _wait_cdp_http_ready(http_base: str, retries: int = 120, delay: float 
     return False
 
 async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[str, Any]):
+    browser = None
+    context = None
+    page = None
+
     try:
         if not addr:
             safe_print(f"❌ [{name}] Missing addr")
@@ -46,8 +50,21 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
             safe_print(f"   - Close other profiles to free resources")
             safe_print(f"   - Check if GPM is overloaded")
             return
-        browser = await p.chromium.connect_over_cdp(addr)
-        safe_print(f"✅ [{name}] Connected to CDP: {addr}")
+
+        # Connect with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                browser = await p.chromium.connect_over_cdp(addr)
+                safe_print(f"✅ [{name}] Connected to CDP: {addr}")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    safe_print(f"⚠️ [{name}] Connection attempt {attempt+1} failed, retrying... ({e})")
+                    await asyncio.sleep(2)
+                else:
+                    safe_print(f"❌ [{name}] Failed to connect after {max_retries} attempts: {e}")
+                    return
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
 
@@ -143,6 +160,25 @@ async def _run_browser_one(p, name: str, addr: str, cookie: str, actions: Dict[s
         safe_print(f"❌ [PW] {name}: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # Cleanup: Close page, context, browser gracefully
+        try:
+            if page and not page.is_closed():
+                await page.close()
+        except Exception as e:
+            safe_print(f"⚠️ [{name}] Error closing page: {e}")
+
+        try:
+            if context:
+                await context.close()
+        except Exception as e:
+            safe_print(f"⚠️ [{name}] Error closing context: {e}")
+
+        try:
+            if browser and browser.is_connected():
+                await browser.close()
+        except Exception as e:
+            safe_print(f"⚠️ [{name}] Error closing browser: {e}")
 
 async def run_all_playwright(jobs: List[Job], actions: Dict[str, Any]):
     # Nếu follow mode là mutual, tạo danh sách tất cả usernames để follow lẫn nhau
@@ -153,8 +189,34 @@ async def run_all_playwright(jobs: List[Job], actions: Dict[str, Any]):
         # Pass danh sách usernames vào actions
         actions["all_usernames"] = all_usernames
 
+    # Process profiles in smaller batches to avoid overwhelming Playwright
+    BATCH_SIZE = 5  # Process 5 profiles at a time to reduce EPIPE errors
+    safe_print(f"🚀 Processing {len(jobs)} profiles in batches of {BATCH_SIZE}")
+
     async with async_playwright() as p:
-        await asyncio.gather(
-            *(_run_browser_one(p, name, addr, cookie, actions) for name, addr, cookie in jobs),
-            return_exceptions=True
-        )
+        for i in range(0, len(jobs), BATCH_SIZE):
+            batch = jobs[i:i+BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(jobs) + BATCH_SIZE - 1) // BATCH_SIZE
+            safe_print(f"📦 Starting batch {batch_num}/{total_batches} ({len(batch)} profiles)")
+
+            # Process batch with error handling
+            results = await asyncio.gather(
+                *(_run_browser_one(p, name, addr, cookie, actions) for name, addr, cookie in batch),
+                return_exceptions=True
+            )
+
+            # Log any errors in this batch
+            for idx, result in enumerate(results):
+                if isinstance(result, Exception):
+                    name = batch[idx][0]
+                    safe_print(f"❌ Batch {batch_num} - Profile {name} failed: {result}")
+
+            safe_print(f"✅ Batch {batch_num}/{total_batches} completed")
+
+            # Small delay between batches to let system stabilize
+            if i + BATCH_SIZE < len(jobs):
+                await asyncio.sleep(2)
+                safe_print(f"⏳ Waiting 2s before next batch...")
+
+    safe_print(f"🎉 All {len(jobs)} profiles processed!")
