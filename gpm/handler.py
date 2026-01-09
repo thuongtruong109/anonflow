@@ -3,7 +3,7 @@ from config import EXCEL_PATH, COOKIES_DIR
 import config
 
 from utils import copy_folder, detect_username_from_cookie_filename, safe_print, normalize_proxy
-from excel import update_excel_column_a_with_cookie_files
+from excel import update_excel_column_a_with_cookie_files, update_excel_column_c_with_profile_id
 from services import (
     create_profile,
     get_profile_id,
@@ -43,6 +43,12 @@ def process_row(name, cookie, proxy_raw, index, actions, total_profiles=None):
         if actions["create"]:
             pid = create_profile(profile_name, proxy)
             safe_print(f"✅ Created {profile_name}")
+            # Update Excel column C with profile ID
+            try:
+                update_excel_column_c_with_profile_id(EXCEL_PATH, profile_name, pid)
+                safe_print(f"📝 Updated Excel column C with ID {pid} for {profile_name}")
+            except Exception as e:
+                safe_print(f"❌ Failed to update Excel with ID for {profile_name}: {e}")
         else:
             pid = get_profile_id(profile_name)
 

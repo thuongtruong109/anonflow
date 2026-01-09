@@ -21,13 +21,13 @@ COOKIE_IMPORTER_EXTENSION_ID = "kndjfojeoamnpbehojpbflmnleahimkb"
 GPM_EXTENSION_LOCATE = "C://Users/admin/Documents/GPMLogin/GlobalExt"
 
 THREADS = 6
-START_LIMIT = 3
+START_LIMIT = 10  # Increased from 3 to 10 to allow more profiles to start simultaneously
 REQUEST_TIMEOUT = 60
 
 GPM_API = "http://127.0.0.1:19995"
 GROUP_NAME = "All"
-BROWSER_CORE = "chromium"
-BROWSER_NAME = "Chrome"
+BROWSER_CORE = 1
+BROWSER_NAME = 1
 
 SCREEN_W = 1920
 SCREEN_H = 1080

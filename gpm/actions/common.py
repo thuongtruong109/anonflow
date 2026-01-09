@@ -518,8 +518,8 @@ def build_common_popup_locators(page: Page):
         page.locator("button[aria-label*='dismiss' i]"),
 
         page.locator(":text('Switch to public')"),
-        page.locator(":text('Got it')"),
-        page.locator(":text('Continue')"),
+        page.locator(":text-matches('^Got it$', 'i')"),
+        page.locator(":text-matches('^Continue$', 'i')")
     ]
 
 async def popup_watcher(

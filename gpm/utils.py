@@ -116,7 +116,7 @@ def normalize_ext(s: str) -> str:
     return s
 
 def detect_username_from_cookie_filename(text: str) -> str:
-    username = re.search(r'\[([^\]]+)\]\.txt$', text)
+    username = re.search(r'\[([^\]]+)\]\.(txt|json)$', text, re.IGNORECASE)
     return normalize_ext(username.group(1)) if username else ""
 
 def copy_folder(source: str, destination: str):

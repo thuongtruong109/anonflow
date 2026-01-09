@@ -1,27 +1,44 @@
 import sys, asyncio, os
 from pathlib import Path
 from datetime import datetime
+
+# Note: No need to change asyncio event loop policy on Windows
+# The default ProactorEventLoop supports subprocesses (needed for Playwright)
+# WindowsSelectorEventLoopPolicy does NOT support subprocesses
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QGroupBox, QGridLayout, QMessageBox,
     QFileDialog, QSplitter, QFrame, QLineEdit, QSpinBox, QCheckBox,
     QScrollArea, QRadioButton, QSizePolicy, QTabWidget, QListWidget, QListWidgetItem,
-    QAbstractItemView
+    QAbstractItemView, QTableWidget, QTableWidgetItem, QHeaderView
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QPropertyAnimation, QEasingCurve, QTimer, QMetaObject, Q_ARG
+from PySide6.QtGui import QFont, QTextCursor, QColor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from excel import update_excel_column_a_with_cookie_files, read_excel
-from services import create_profile, start_profile, close_profile, delete_profile, get_profiles_list, get_debug_addr, get_profile_id, remember_debug_addr
+from services import create_profile, start_profile, close_profile, delete_profile, get_debug_addr, get_profile_id, remember_debug_addr
 from runner import run_all_playwright
-from utils import safe_print
+from utils import safe_print, detect_username_from_cookie_filename
 from handler import process_row
 
+class ThreadSafeTextEdit(QTextEdit):
+    """QTextEdit with thread-safe append method"""
+
+    @Slot(str)
+    def _append_text_safe(self, text):
+        """Thread-safe method to append text (called from main thread via QMetaObject.invokeMethod)"""
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        self.insertPlainText(text)
+        self.ensureCursorVisible()
+
 class OutputRedirector:
-    """Redirect stdout/stderr to GUI terminal"""
+    """Redirect stdout/stderr to GUI terminal (THREAD-SAFE)"""
     def __init__(self, text_widget, original_stream):
         self.text_widget = text_widget
         self.original_stream = original_stream
@@ -30,18 +47,35 @@ class OutputRedirector:
         if text.strip():
             # Also write to original stream for debugging
             if self.original_stream:
-                self.original_stream.write(text)
+                try:
+                    self.original_stream.write(text)
+                    self.original_stream.flush()
+                except:
+                    pass
 
-            # Write to GUI
-            cursor = self.text_widget.textCursor()
-            cursor.movePosition(QTextCursor.End)
-            self.text_widget.setTextCursor(cursor)
-            self.text_widget.insertPlainText(text)
-            self.text_widget.ensureCursorVisible()
+            # Write to GUI using thread-safe method
+            # Use QMetaObject.invokeMethod to ensure GUI updates happen in main thread
+            try:
+                QMetaObject.invokeMethod(
+                    self.text_widget,
+                    "_append_text_safe",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, text)
+                )
+            except Exception as e:
+                # Fallback: write to original stream if GUI update fails
+                if self.original_stream:
+                    try:
+                        self.original_stream.write(f"[GUI Update Failed: {e}]\n")
+                    except:
+                        pass
 
     def flush(self):
         if self.original_stream:
-            self.original_stream.flush()
+            try:
+                self.original_stream.flush()
+            except:
+                pass
 
 
 class TaskWorker(QThread):
@@ -134,43 +168,6 @@ class ModernButton(QPushButton):
         return f"#{r:02x}{g:02x}{b:02x}"
 
 
-class ProfileListItem(QWidget):
-    """Custom widget for profile list items with name and delete button"""
-    delete_clicked = Signal(str, str)  # profile_id, profile_name
-    close_clicked = Signal(str, str)  # profile_id, profile_name
-
-    def __init__(self, profile_name, profile_id):
-        super().__init__()
-        self.profile_name = profile_name
-        self.profile_id = profile_id
-        self.setMinimumHeight(40)  # Ensure adequate height for the widget
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
-
-        # Profile name label
-        self.name_label = QLabel(profile_name)
-        self.name_label.setFont(QFont("Segoe UI", 9))
-        self.name_label.setStyleSheet("font-weight: bold; background-color: transparent;")
-
-        # Close button (initially hidden)
-        self.close_btn = ModernButton("Close", "⏹️", "#FF9800")
-        self.close_btn.setFixedSize(70, 25)
-        self.close_btn.setVisible(False)  # Hidden by default
-        self.close_btn.clicked.connect(self.on_close_clicked)
-
-        layout.addWidget(self.name_label)
-        layout.addStretch()
-        layout.addWidget(self.close_btn)
-
-    def update_status(self, is_started):
-        """Show/hide close button based on profile status"""
-        self.close_btn.setVisible(is_started)
-
-    def on_close_clicked(self):
-        self.close_clicked.emit(self.profile_id, self.profile_name)
-
 class GPMMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -183,6 +180,39 @@ class GPMMainWindow(QMainWindow):
         self.selected_profiles = []  # List of selected profile IDs
         self.init_ui()
 
+    def closeEvent(self, event):
+        """Handle window close event - cleanup worker thread"""
+        if self.current_worker and self.current_worker.isRunning():
+            reply = QMessageBox.question(
+                self,
+                'Confirm Exit',
+                'A task is still running. Do you want to stop it and exit?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.stop_requested = True
+                if self.current_worker:
+                    self.current_worker.stop()
+                    # Wait for worker to finish with timeout
+                    if not self.current_worker.wait(3000):  # 3 seconds timeout
+                        self.current_worker.terminate()
+                        self.current_worker.wait()
+                event.accept()
+            else:
+                event.ignore()
+                return
+
+        # Restore stdout/stderr before closing
+        try:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+        except:
+            pass
+
+        event.accept()
+
     def init_ui(self):
         self.setWindowTitle("Anonflow")
         self.setMinimumSize(1200, 400)
@@ -193,7 +223,7 @@ class GPMMainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
         # Top row: Header + Settings (left) and Tasks (right) with 3:7 ratio
@@ -210,15 +240,15 @@ class GPMMainWindow(QMainWindow):
         # Create a widget to hold the left column
         left_widget = QWidget()
         left_widget.setLayout(left_column)
-        left_widget.setMinimumWidth(270)  # Fixed minimum width for quick settings, cookie setting and tasks
-        left_widget.setMaximumWidth(270)  # Maximum width limit
+        left_widget.setMinimumWidth(210)  # Fixed minimum width for quick settings, cookie setting and tasks
+        left_widget.setMaximumWidth(210)  # Maximum width limit
 
         # Add to top row - proxy settings and behavior actions will take remaining space
         top_row_layout.addWidget(left_widget)
         proxy_widget = self.create_config_section()
-        top_row_layout.addWidget(proxy_widget)
+        top_row_layout.addWidget(proxy_widget, 4)  # Give even more space to proxy settings
         behavior_widget = self.create_behavior_actions_section()
-        top_row_layout.addWidget(behavior_widget)
+        top_row_layout.addWidget(behavior_widget, 2)  # Keep behavior actions compact
         layout.addLayout(top_row_layout)
 
         # Main splitter - Terminal only
@@ -342,7 +372,7 @@ class GPMMainWindow(QMainWindow):
         title.setFont(QFont("Segoe UI", 12, QFont.Bold))
         title.setStyleSheet("color: white;")
 
-        subtitle = QLabel("TikTok Profile & Cookie Management")
+        subtitle = QLabel("TikTok Profile Management")
         subtitle.setFont(QFont("Segoe UI", 8))
         subtitle.setStyleSheet("color: #bbdefb;")
 
@@ -371,7 +401,7 @@ class GPMMainWindow(QMainWindow):
         """)
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
-        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Create tab widget
         tab_widget = QTabWidget()
@@ -383,11 +413,11 @@ class GPMMainWindow(QMainWindow):
             QTabBar::tab {
                 background-color: #2a2a2a;
                 color: #ffffff;
-                padding: 8px 16px;
+                padding: 4px 16px;
                 border: 1px solid #2196F3;
                 border-bottom: none;
                 border-radius: 4px 4px 0 0;
-                margin-right: 2px;
+                margin: 0 0 4px 8px;
             }
             QTabBar::tab:selected {
                 background-color: #2196F3;
@@ -404,77 +434,36 @@ class GPMMainWindow(QMainWindow):
         proxies_layout.setSpacing(10)
         proxies_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Profile addresses text area
-        self.profiles_text = QTextEdit()
-        self.profiles_text.setReadOnly(False)
-        self.profiles_text.setFont(QFont("Consolas", 8))
-        self.profiles_text.setStyleSheet("""
-            QTextEdit {
+        # Create table with 2 columns: Cookie (read-only) and Proxy (editable)
+        self.profiles_table = QTableWidget()
+        self.profiles_table.setColumnCount(2)
+        self.profiles_table.setHorizontalHeaderLabels(["📁 Cookie (Read Only)", "🌐 Proxy (Editable)"])
+
+        # Style the table
+        self.profiles_table.setStyleSheet("""
+            QTableWidget {
                 background-color: #0a0a0a;
                 color: #ffaa00;
                 border: none;
-                padding: 6px;
-                font-family: 'Consolas', 'Courier New', monospace;
-            }
-            QTextEdit:focus {
-                border: 1px solid #42A5F5;
-            }
-        """)
-        self.profiles_text.setPlaceholderText("Profile addresses will be displayed here...\nEdit and save to update Excel file.")
-
-        proxies_layout.addWidget(self.profiles_text)
-
-        # Action buttons (2x2 grid)
-        buttons_layout = QGridLayout()
-        buttons_layout.setSpacing(8)
-
-        create_profiles_btn = ModernButton("Create Profiles", "➕", "#2196F3")
-        create_profiles_btn.clicked.connect(self.create_profiles)
-
-        update_profiles_btn = ModernButton("Update Profiles", "🔄", "#00BCD4")
-        update_profiles_btn.clicked.connect(self.update_profiles)
-
-        view_btn = ModernButton("View File", "📊", "#9C27B0")
-        view_btn.clicked.connect(self.view_excel_file)
-
-        save_btn = ModernButton("Save Changes", "💾", "#4CAF50")
-        save_btn.clicked.connect(self.save_profiles_to_excel)
-
-        buttons_layout.addWidget(create_profiles_btn, 0, 0)
-        buttons_layout.addWidget(update_profiles_btn, 0, 1)
-        buttons_layout.addWidget(view_btn, 1, 0)
-        buttons_layout.addWidget(save_btn, 1, 1)
-
-        proxies_layout.addLayout(buttons_layout)
-
-        tab_widget.addTab(proxies_tab, "Proxies")
-
-        # Profiles tab - Display list of existing profiles
-        profiles_tab = QWidget()
-        profiles_layout = QVBoxLayout(profiles_tab)
-        profiles_layout.setSpacing(10)
-        profiles_layout.setContentsMargins(8, 8, 8, 8)
-
-        # Profiles list widget
-        self.profiles_list = QListWidget()
-        self.profiles_list.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Allow multi-select with drag
-        self.profiles_list.itemSelectionChanged.connect(self.update_selected_profiles)
-        self.profiles_list.setStyleSheet("""
-            QListWidget {
-                background-color: #0a0a0a;
-                color: #ffaa00;
-                border: none;
-                padding: 6px;
+                gridline-color: #222;
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 9pt;
             }
-            QListWidget::item {
-                padding: 0 8px 8px 8px;
-                border-bottom: 1px solid #333;
+            QTableWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #222;
             }
-            QListWidget::item:selected {
+            QTableWidget::item:selected {
                 background-color: #222222;
                 color: white;
+            }
+            QHeaderView::section {
+                background-color: #1a1a1a;
+                color: #2196F3;
+                padding: 8px;
+                border: 1px solid #333;
+                font-weight: bold;
+                font-size: 9pt;
             }
             QScrollBar:vertical {
                 border: none;
@@ -506,15 +495,52 @@ class GPMMainWindow(QMainWindow):
             }
         """)
 
-        profiles_layout.addWidget(self.profiles_list)
+        # Configure table properties
+        self.profiles_table.horizontalHeader().setStretchLastSection(True)
+        self.profiles_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)  # Cookie column - fixed width
+        self.profiles_table.setColumnWidth(0, 200)  # Set cookie column width to fit longest username (23 chars) - compact
+        self.profiles_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)  # Proxy column - takes remaining space
+        self.profiles_table.verticalHeader().setVisible(True)
+        self.profiles_table.setAlternatingRowColors(False)  # Disable alternating colors
 
-        # Refresh button for profiles list
-        refresh_profiles_btn = ModernButton("Refresh Profiles", "🔄", "#00BCD4")
-        refresh_profiles_btn.clicked.connect(self.refresh_profiles_list)
+        # Enable multi-selection for profiles table
+        self.profiles_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.profiles_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.profiles_table.itemSelectionChanged.connect(self.update_selected_profiles)
 
-        profiles_layout.addWidget(refresh_profiles_btn)
+        proxies_layout.addWidget(self.profiles_table)
 
-        tab_widget.addTab(profiles_tab, "Profiles")
+        # Action buttons (horizontal layout)
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(8)
+
+        create_profiles_btn = ModernButton("Create Profiles", "➕", "#2196F3")
+        create_profiles_btn.setMinimumHeight(30)
+        create_profiles_btn.clicked.connect(self.create_profiles)
+
+        update_profiles_btn = ModernButton("Update Proxies", "🔄", "#00BCD4")
+        update_profiles_btn.setMinimumHeight(30)
+        update_profiles_btn.clicked.connect(self.update_profiles)
+
+        view_btn = ModernButton("View Source", "📊", "#9C27B0")
+        view_btn.setMinimumHeight(30)
+        view_btn.clicked.connect(self.view_excel_file)
+
+        save_btn = ModernButton("Save Changes", "💾", "#4CAF50")
+        save_btn.setMinimumHeight(30)
+        save_btn.clicked.connect(self.save_profiles_to_excel)
+
+        buttons_layout.addWidget(create_profiles_btn)
+        buttons_layout.addWidget(update_profiles_btn)
+        buttons_layout.addWidget(view_btn)
+        buttons_layout.addWidget(save_btn)
+
+        # Add stretch to push buttons to the left
+        buttons_layout.addStretch()
+
+        proxies_layout.addLayout(buttons_layout)
+
+        tab_widget.addTab(proxies_tab, "Proxies")
 
         # Others tab - Configuration options
         others_tab = QWidget()
@@ -618,7 +644,7 @@ class GPMMainWindow(QMainWindow):
         group.setLayout(main_layout)
 
         self.load_excel_data()
-        self.refresh_profiles_list()  # Load profiles list on startup
+        # self.refresh_profiles_list()  # Removed - profiles tab no longer exists
 
         return group
 
@@ -1054,13 +1080,13 @@ class GPMMainWindow(QMainWindow):
     def create_behavior_actions_section(self):
         group = QGroupBox("🎭 Behavior Actions")
         layout = QVBoxLayout()
-        layout.setSpacing(8)
+        layout.setSpacing(4)
         layout.setContentsMargins(6, 6, 6, 6)
 
         # Mode selection radio buttons
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(10)
-        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setContentsMargins(8, 6, 0, 0)
 
         mode_label = QLabel("Mode:")
         mode_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
@@ -1238,7 +1264,6 @@ class GPMMainWindow(QMainWindow):
         # self.task_options will be updated
 
         for i, (name, icon, idx, has_options) in enumerate(tasks):
-            # Create task item container
             task_item = QFrame()
             task_item.setStyleSheet("""
                 QFrame {
@@ -1297,7 +1322,7 @@ class GPMMainWindow(QMainWindow):
                 arrow_btn.setMaximumHeight(30)
                 arrow_btn.setStyleSheet("""
                     QPushButton {
-                        background-color: #555555;
+                        background-color: #333333;
                         color: white;
                         border: none;
                         border-radius: 4px;
@@ -1305,7 +1330,7 @@ class GPMMainWindow(QMainWindow):
                         font-weight: bold;
                     }
                     QPushButton:hover {
-                        background-color: #777777;
+                        background-color: #555555;
                     }
                     QPushButton:pressed {
                         background-color: #555555;
@@ -1689,7 +1714,7 @@ class GPMMainWindow(QMainWindow):
         container_layout.setSpacing(0)
 
         # Terminal fills the container
-        self.terminal = QTextEdit()
+        self.terminal = ThreadSafeTextEdit()
         self.terminal.setReadOnly(True)
         self.terminal.setFont(QFont("Consolas", 10))
         self.terminal.setMaximumHeight(100)
@@ -1927,7 +1952,7 @@ class GPMMainWindow(QMainWindow):
             excel_path = config.EXCEL_PATH
 
             if not os.path.exists(excel_path):
-                self.profiles_text.setPlainText(f"❌ Excel file not found:\n{excel_path}")
+                self.profiles_table.setRowCount(0)
                 if hasattr(self, 'terminal'):
                     self.log(f"❌ Excel file not found: {excel_path}")
                 return
@@ -1935,157 +1960,64 @@ class GPMMainWindow(QMainWindow):
             rows = read_excel()
 
             if not rows:
-                self.profiles_text.setPlainText("")
+                self.profiles_table.setRowCount(0)
                 if hasattr(self, 'terminal'):
                     self.log("⚠️ No data found in Excel file")
                 return
 
-            # Extract profiles (column B only)
-            profiles_list = []
+            # Set table row count
+            self.profiles_table.setRowCount(len(rows))
 
-            for row in rows:
+            # Populate table with data
+            for i, row in enumerate(rows):
                 if len(row) >= 3:
                     # row is (profile_name, cookie_path, proxy)
-                    proxy = row[2] if row[2] else ""    # proxy is at index 2
-                    profiles_list.append(proxy)
+                    cookie_path = row[1] if row[1] else ""  # cookie_path is at index 1
+                    proxy = row[2] if row[2] else ""        # proxy is at index 2
 
-            # Update text area
-            profiles_text = "\n".join(profiles_list) if profiles_list else "⚠️ No profiles found"
-            self.profiles_text.setPlainText(profiles_text)
+                    # Cookie column (read-only) - display username instead of full path
+                    username = detect_username_from_cookie_filename(cookie_path) if cookie_path else ""
+                    cookie_item = QTableWidgetItem(username)
+                    cookie_item.setFlags(cookie_item.flags() & ~Qt.ItemIsEditable)  # Make read-only
+                    cookie_item.setForeground(QColor("#9E9E9E"))  # Gray color for read-only
+                    self.profiles_table.setItem(i, 0, cookie_item)
+
+                    # Proxy column (editable)
+                    proxy_item = QTableWidgetItem(proxy)
+                    proxy_item.setForeground(QColor("#ffaa00"))  # Yellow color for editable
+                    self.profiles_table.setItem(i, 1, proxy_item)
 
             if hasattr(self, 'terminal'):
                 self.log(f"✅ Loaded {len(rows)} rows from Excel: {excel_path}")
 
+            # Clear any previous selections since table data changed
+            self.selected_profiles = []
+
         except Exception as e:
             error_msg = f"❌ Error loading Excel data: {str(e)}"
-            self.profiles_text.setPlainText(error_msg)
+            self.profiles_table.setRowCount(0)
             if hasattr(self, 'terminal'):
                 self.log(error_msg)
-
-    def refresh_profiles_list(self):
-        """Refresh the profiles list from GPM API"""
-        try:
-            self.profiles_list.clear()
-
-            # Get profiles from GPM API
-            profiles = get_profiles_list()
-
-            if not profiles:
-                item = QListWidgetItem("⚠️ No profiles found")
-                item.setForeground(Qt.yellow)
-                self.profiles_list.addItem(item)
-                return
-
-            # Add profiles to list
-            for profile in profiles:
-                # Create custom widget for profile item
-                profile_item = ProfileListItem(profile['name'], profile['id'])
-                profile_item.delete_clicked.connect(self.on_delete_profile)
-                profile_item.close_clicked.connect(self.on_close_profile)
-
-                # Check if profile is started
-                try:
-                    addr = get_debug_addr(profile['name'])
-                    is_started = addr is not None
-                except Exception as e:
-                    is_started = False
-                    if hasattr(self, 'terminal'):
-                        self.log(f"⚠️ Could not check status for {profile['name']}: {e}")
-
-                profile_item.update_status(is_started)
-
-                # Create list widget item and set the custom widget
-                list_item = QListWidgetItem()
-                list_item.setSizeHint(profile_item.sizeHint())
-                self.profiles_list.addItem(list_item)
-                self.profiles_list.setItemWidget(list_item, profile_item)
-
-            # Select all items by default
-            self.profiles_list.selectAll()
-            self.update_selected_profiles()
-
-            if hasattr(self, 'terminal'):
-                self.log(f"✅ Loaded {len(profiles)} profiles from GPM")
-
-        except Exception as e:
-            error_msg = f"❌ Error loading profiles: {str(e)}"
-            self.profiles_list.clear()
-            item = QListWidgetItem(error_msg)
-            item.setForeground(Qt.red)
-            self.profiles_list.addItem(item)
+            self.cookies_text.setPlainText("")
             if hasattr(self, 'terminal'):
                 self.log(error_msg)
 
     def update_selected_profiles(self):
-        """Update the list of selected profile names"""
+        """Update the list of selected profile names from table selection"""
         self.selected_profiles = []
-        for item in self.profiles_list.selectedItems():
-            widget = self.profiles_list.itemWidget(item)
-            if widget:
-                self.selected_profiles.append(widget.profile_name)
+
+        # Handle profiles table selection (from Proxies tab)
+        for row in set(index.row() for index in self.profiles_table.selectedIndexes()):
+            # Get username from column 0 (cookie column)
+            username_item = self.profiles_table.item(row, 0)
+            if username_item:
+                username = username_item.text().strip()
+                if username:
+                    self.selected_profiles.append(username)
+
         # Optional: log the count
         if hasattr(self, 'terminal'):
             self.log(f"📋 Selected {len(self.selected_profiles)} profiles")
-
-    def on_delete_profile(self, profile_id, profile_name):
-        """Handle profile deletion"""
-        reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
-            f"Are you sure you want to delete the profile '{profile_name}'?\n\nThis action cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            try:
-                # Call delete API
-                delete_profile(profile_id)
-
-                # Log success
-                if hasattr(self, 'terminal'):
-                    self.log(f"✅ Successfully deleted profile: {profile_name}")
-
-                # Refresh the profiles list
-                self.refresh_profiles_list()
-
-                # Show success message
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Profile '{profile_name}' has been deleted successfully."
-                )
-
-            except Exception as e:
-                error_msg = f"❌ Failed to delete profile '{profile_name}': {str(e)}"
-                if hasattr(self, 'terminal'):
-                    self.log(error_msg)
-
-                QMessageBox.critical(
-                    self,
-                    "Delete Failed",
-                    f"Failed to delete profile '{profile_name}'.\n\nError: {str(e)}"
-                )
-
-    def on_close_profile(self, profile_id, profile_name):
-        """Handle profile close"""
-        try:
-            # Close profile
-            close_profile(profile_id)
-            self.log(f"✅ Closed profile: {profile_name}")
-
-            # Refresh the profiles list to update button visibility
-            self.refresh_profiles_list()
-
-        except Exception as e:
-            error_msg = f"❌ Failed to close profile '{profile_name}': {str(e)}"
-            if hasattr(self, 'terminal'):
-                self.log(error_msg)
-            QMessageBox.critical(
-                self,
-                "Error",
-                error_msg
-            )
 
     @Slot()
     def view_excel_file(self):
@@ -2131,16 +2063,14 @@ class GPMMainWindow(QMainWindow):
                 self.log(f"❌ Excel file not found: {excel_path}")
                 return
 
-            # Get edited text from textarea
-            text_content = self.profiles_text.toPlainText()
-            lines = text_content.strip().split('\n')
-
-            # Parse profiles from text - each line is a profile
+            # Get proxy data from table (column 1 - Proxy column)
             profiles_list = []
-            for line in lines:
-                line = line.strip()
-                if line and not line.startswith('⚠️'):
-                    profiles_list.append(line)
+            for row in range(self.profiles_table.rowCount()):
+                proxy_item = self.profiles_table.item(row, 1)  # Column 1 is Proxy
+                if proxy_item:
+                    proxy = proxy_item.text().strip()
+                    if proxy and not proxy.startswith('⚠️'):
+                        profiles_list.append(proxy)
 
             # Allow saving empty list (clears all profiles)
             wb = load_workbook(excel_path)
@@ -2190,22 +2120,23 @@ class GPMMainWindow(QMainWindow):
     def _start_selected_profile(self, profile_name, pid, index, total_profiles, actions):
         """Start a single selected profile from GUI"""
         try:
-            with config.start_sem:
-                # Check if already started
-                existing_addr = get_debug_addr(profile_name)
-                if existing_addr:
-                    addr = existing_addr
-                    safe_print(f"✅ Reusing existing connection for {profile_name} -> {addr}")
-                else:
-                    addr = start_profile(pid, index, total_profiles)
-                    safe_print(f"✅ Started {profile_name} -> {addr}")
-                    remember_debug_addr(profile_name, addr)
+            # Check if already started
+            existing_addr = get_debug_addr(profile_name)
+            if existing_addr:
+                addr = existing_addr
+                safe_print(f"✅ Reusing existing connection for {profile_name} -> {addr}")
+            else:
+                addr = start_profile(pid, index, total_profiles)
+                safe_print(f"✅ Started {profile_name} -> {addr}")
+                remember_debug_addr(profile_name, addr)
 
-                # Add to playwright jobs if needed
-                if (actions["import"] or actions["pw"]) and addr:
-                    with config.pw_jobs_lock:
-                        # For GUI-selected profiles, no cookie file
-                        config.pw_jobs.append((profile_name, addr, ""))
+            # CRITICAL FIX: Add to playwright jobs if CDP mode is enabled
+            # This ensures behavior actions will run on started profiles
+            if (actions["import"] or actions["pw"]) and addr:
+                with config.pw_jobs_lock:
+                    # For GUI-selected profiles, no cookie file
+                    config.pw_jobs.append((profile_name, addr, ""))
+                    safe_print(f"📝 [{profile_name}] Added to playwright jobs queue (CDP mode)")
 
         except Exception as e:
             safe_print(f"❌ {profile_name}: {e}")
@@ -2272,10 +2203,15 @@ class GPMMainWindow(QMainWindow):
             # Determine if we're in CDP mode based on checkbox
             is_cdp_mode = hasattr(self, 'run_with_cdp_checkbox') and self.run_with_cdp_checkbox.isChecked()
 
+            self.log(f"🔍 CDP Mode Check: checkbox_exists={hasattr(self, 'run_with_cdp_checkbox')}, is_checked={is_cdp_mode}")
+
             # QUAN TRỌNG: Enable pw mode nếu CDP checkbox được check
             # pw mode = CDP connection mode, cần thiết để control browser qua Playwright
             if is_cdp_mode:
                 actions["pw"] = True
+                self.log("✅ CDP mode ENABLED - Behavior actions will work")
+            else:
+                self.log("⚠️ CDP mode DISABLED - Only profile start will work")
 
             # Check behavior mode (Tiktok or Search)
             behavior_mode = "tiktok" if self.tiktok_radio.isChecked() else "search"
@@ -2392,7 +2328,8 @@ class GPMMainWindow(QMainWindow):
 
                 if use_selected_profiles:
                     # Use selected profiles from GUI (GPM API profiles)
-                    safe_print(f"� Starting {len(self.selected_profiles)} selected profiles from GUI")
+                    safe_print(f"🎯 Starting {len(self.selected_profiles)} selected profiles from GUI")
+                    safe_print(f"🔧 Actions: start={actions['start']}, pw={actions['pw']}, import={actions['import']}")
 
                     # Get profile IDs from profile names
                     profile_ids_to_start = []
@@ -2400,11 +2337,13 @@ class GPMMainWindow(QMainWindow):
                         try:
                             pid = get_profile_id(profile_name)
                             profile_ids_to_start.append((profile_name, pid))
+                            safe_print(f"✅ Found profile ID for {profile_name}: {pid}")
                         except Exception as e:
                             safe_print(f"❌ Failed to get ID for profile {profile_name}: {e}")
 
                     # Start profiles without Excel data (no cookie import)
                     total_profiles = len(profile_ids_to_start)
+                    safe_print(f"🚀 Will start {total_profiles} profiles with START_LIMIT={config.START_LIMIT}")
 
                     with ThreadPoolExecutor(max_workers=config.THREADS) as ex:
                         futures = []
@@ -2473,18 +2412,46 @@ class GPMMainWindow(QMainWindow):
                     with config.pw_jobs_lock:
                         jobs = config.pw_jobs.copy()
 
+                    safe_print(f"🎬 Playwright jobs check: import={actions['import']}, pw={actions['pw']}")
+                    safe_print(f"📋 Total jobs collected: {len(jobs)}")
+
                     if not jobs:
                         safe_print("⚠️ No playwright jobs collected.")
+                        safe_print("💡 Make sure 'Run with CDP' checkbox is checked to enable behavior actions!")
                     else:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                        safe_print(f"🚀 Starting Playwright execution for {len(jobs)} profiles...")
+
+                        # Proper asyncio event loop setup for worker thread
+                        loop = None
                         try:
+                            # Create new event loop for this thread
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+
+                            # Run playwright with proper error handling
                             loop.run_until_complete(run_all_playwright(jobs, actions))
+
                         except Exception as e:
                             if not self.stop_requested:
                                 safe_print(f"❌ Playwright error: {e}")
+                                import traceback
+                                safe_print(traceback.format_exc())
                         finally:
-                            loop.close()
+                            # Proper cleanup to avoid segfault
+                            if loop and not loop.is_closed():
+                                try:
+                                    # Cancel all pending tasks
+                                    pending = asyncio.all_tasks(loop)
+                                    for task in pending:
+                                        task.cancel()
+                                    # Run loop one more time to let tasks cleanup
+                                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                except Exception:
+                                    pass
+                                finally:
+                                    loop.close()
+                            # Reset event loop
+                            asyncio.set_event_loop(None)
 
                 safe_print("✅ ALL DONE")
 
@@ -2582,6 +2549,10 @@ class GPMMainWindow(QMainWindow):
         self.run_tasks_with_actions(actions, "🔄 Update Profiles")
 
 def run_gui():
+    # Use default asyncio event loop policy (ProactorEventLoop on Windows)
+    # This is required for Playwright subprocess support
+    # DO NOT change to WindowsSelectorEventLoopPolicy as it doesn't support subprocesses
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
