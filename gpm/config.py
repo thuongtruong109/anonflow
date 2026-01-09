@@ -74,6 +74,7 @@ def setup_logger(
     backup_count: int = 20,
     max_age_days: int = 3,
     console: bool = True,
+    write_to_file: bool = False,
 ) -> logging.Logger:
     os.makedirs(log_dir, exist_ok=True)
     _safe_reconfigure_stdout_utf8()
@@ -94,18 +95,19 @@ def setup_logger(
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
-    file_path = os.path.join(log_dir, f"{module_name}.log")
-    file_handler = RotatingFileHandler(
-        file_path,
-        maxBytes=max_bytes,
-        backupCount=backup_count,
-        encoding="utf-8"
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    if write_to_file:
+        file_path = os.path.join(log_dir, f"{module_name}.log")
+        file_handler = RotatingFileHandler(
+            file_path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8"
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
-    _cleanup_old_logs(log_dir, max_age_days, prefix=f"{module_name}.log")
+        _cleanup_old_logs(log_dir, max_age_days, prefix=f"{module_name}.log")
 
     logger.propagate = False
     return logger

@@ -2,10 +2,6 @@ import sys, asyncio, os
 from pathlib import Path
 from datetime import datetime
 
-# Note: No need to change asyncio event loop policy on Windows
-# The default ProactorEventLoop supports subprocesses (needed for Playwright)
-# WindowsSelectorEventLoopPolicy does NOT support subprocesses
-
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QGroupBox, QGridLayout, QMessageBox,

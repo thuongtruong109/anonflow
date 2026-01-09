@@ -163,96 +163,54 @@ async def track_and_log_video(page: Page, username: str = "") -> None:
 
 
 async def check_login_status(page: Page, username: str = "") -> bool:
+    """
+    Kiểm tra login status bằng cách navigate đến /setting.
+    Nếu redirect đến /foryou hoặc /login thì chưa login, nếu không redirect thì đã login.
+
+    Args:
+        page: Playwright Page object
+        username: Tên người dùng để log (optional)
+
+    Returns:
+        True nếu đã login (không redirect), False nếu chưa login (redirect đến foryou/login)
+    """
     try:
-        # Wait a bit for the page to load elements (TikTok can be slow)
-        await sleep_ms(2000, 4000)
+        # Lưu URL hiện tại để quay lại sau
+        original_url = page.url
 
-        logged_in_selector = '[data-e2e="edit-profile-entrance"]'
-        not_logged_in_selector = '[data-e2e="follow-button"]'
+        # Navigate đến /setting để check login
+        await page.goto("https://www.tiktok.com/setting?lang=en", wait_until="domcontentloaded", timeout=30000)
 
-        # Additional potential selectors (based on common TikTok patterns; verify via browser inspect)
-        alt_logged_in_selectors = [
-            '[data-e2e="profile-edit-button"]',  # Alternative edit button
-            'a[href*="/setting"]',  # Settings link often present when logged in
-        ]
-        alt_not_logged_in_selectors = [
-            '[data-e2e="nav-profile"]',  # Profile nav might differ
-        ]
+        # Đợi một lúc để xem có redirect không (3-5 giây)
+        await sleep_ms(3000, 5000)
 
-        # Check primary logged-in selector
-        logged_in_el = page.locator(logged_in_selector).first
-        if await logged_in_el.count() > 0 and await logged_in_el.is_visible():
+        # Kiểm tra URL hiện tại
+        current_url = page.url
+
+        # Nếu redirect đến /foryou hoặc /login thì chưa login
+        if "/foryou" in current_url.lower() or "/login" in current_url.lower():
+            redirect_reason = "foryou" if "/foryou" in current_url.lower() else "login"
             if username and username != "":
                 _log_action(
                     "login.log",
                     username,
-                    page.url,
-                    "Login status: true (edit-profile-entrance found)"
+                    original_url,
+                    f"Login status: false (redirected to {redirect_reason})"
+                )
+            return False
+        else:
+            # Không redirect, vẫn ở /setting -> đã login
+            if username and username != "":
+                _log_action(
+                    "login.log",
+                    username,
+                    original_url,
+                    "Login status: true (no redirect)"
                 )
             return True
 
-        # Check alternative logged-in selectors
-        for selector in alt_logged_in_selectors:
-            el = page.locator(selector).first
-            if await el.count() > 0 and await el.is_visible():
-                if username and username != "":
-                    _log_action(
-                        "login.log",
-                        username,
-                        page.url,
-                        f"Login status: true"
-                    )
-                return True
-
-        # Check not-logged-in selectors
-        not_logged_in_el = page.locator(not_logged_in_selector).first
-        if await not_logged_in_el.count() > 0 and await not_logged_in_el.is_visible():
-            if username and username != "":
-                _log_action(
-                    "login.log",
-                    username,
-                    page.url,
-                    "Login status: false"
-                )
-            return False
-
-        # Check alternative not-logged-in selectors
-        for selector in alt_not_logged_in_selectors:
-            el = page.locator(selector).first
-            if await el.count() > 0 and await el.is_visible():
-                if username and username != "":
-                    _log_action(
-                        "login.log",
-                        username,
-                        page.url,
-                        f"Login status: false"
-                    )
-                return False
-
-        # Fallback: If on own profile and no follow button, assume logged in (but log for review)
-        # This is a heuristic—test carefully to avoid false positives
-        if username and username != "" and f"/@{username}" in page.url:
-            follow_check = page.locator('[data-e2e="follow-button"]')
-            if await follow_check.count() == 0:
-                _log_action(
-                    "login.log",
-                    username,
-                    page.url,
-                    "Login status: true (fallback: no follow button on own profile)"
-                )
-                return True
-
-        # No match found
-        if username and username != "":
-            _log_action(
-                "login.log",
-                username,
-                page.url,
-                "Login status: false (no matching element)"
-            )
-        return False
-
     except Exception as e:
+        # Nếu có lỗi, coi như chưa login
         if username and username != "":
             _log_action(
                 "login.log",
@@ -511,7 +469,10 @@ async def random_like_video(page: Page, username: str = "") -> bool:
 
                 # Log action
                 if username and username != "":
-                    video_url = page.url
+                    # Lấy URL của video cụ thể thay vì page URL
+                    video_url = await get_current_video_url(page)
+                    if not video_url:
+                        video_url = page.url  # Fallback nếu không lấy được
                     _log_action("like.log", username, video_url, "Liked video")
 
                 break
@@ -609,7 +570,10 @@ async def random_follow_in_feed(page: Page, username: str = "") -> bool:
 
         # Log action nếu follow thành công
         if follow_success and username and username != "":
-            video_url = page.url
+            # Lấy URL của video cụ thể thay vì page URL
+            video_url = await get_current_video_url(page)
+            if not video_url:
+                video_url = page.url  # Fallback nếu không lấy được
             # Lấy username của author nếu có
             try:
                 author_link = page.locator('a[data-e2e="video-author-uniqueid"]').first
@@ -821,7 +785,10 @@ async def random_comment_on_video(page: Page, username: str = "", text_randomize
 
         # Log action - chỉ log khi có username thực sự (không phải "")
         if username and username != "":
-            video_url = page.url
+            # Lấy URL của video cụ thể thay vì page URL
+            video_url = await get_current_video_url(page)
+            if not video_url:
+                video_url = page.url  # Fallback nếu không lấy được
             _log_action("comment.log", username, video_url, f"Commented: {comment_text}")
 
         return True
@@ -853,6 +820,8 @@ async def random_interact_in_profile(page: Page, username: str = "", is_logged_i
         "Your videos will appear here",
         "No content",
         "This user has not published any videos."
+        "Something went wrong"
+        "Sorry about that! Please try again later."
     ]
 
     has_no_content = False
@@ -865,10 +834,10 @@ async def random_interact_in_profile(page: Page, username: str = "", is_logged_i
         except Exception:
             continue
 
-    # Nếu không có video trong profile, quay về /foryou
+    # Nếu không có video trong profile, quay về homepage
     if has_no_content:
         try:
-            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+            await page.goto("https://www.tiktok.com/?lang=en", wait_until="load")
             await page.wait_for_load_state("networkidle", timeout=60000)
             await sleep_ms(2000, 4000)
             await close_cta_modal_if_any(page)
@@ -926,10 +895,10 @@ async def random_interact_in_profile(page: Page, username: str = "", is_logged_i
     if len(links) > 3:
         links = links[2:]
 
-    # Nếu không tìm thấy video nào, quay về /foryou
+    # Nếu không tìm thấy video nào, quay về homepage
     if not links:
         try:
-            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load")
+            await page.goto("https://www.tiktok.com/?lang=en", wait_until="load")
             await page.wait_for_load_state("networkidle", timeout=60000)
             await sleep_ms(2000, 4000)
             await close_cta_modal_if_any(page)
@@ -1021,7 +990,7 @@ async def run_tiktok_flow(
     *,
     will_view_min: int = 5,
     will_view_max: int = 15,
-    username: str = "foryou",
+    username: str = "",
     follow: bool = False,
     like_video: bool = False,
     comment: bool = False,
@@ -1052,10 +1021,22 @@ async def run_tiktok_flow(
     watcher = start_popup_watcher(page)
 
     try:
-        # 1. Navigate trực tiếp đến /foryou thay vì profile page (nhanh hơn)
-        print(f"🌐 [{username}] Navigating to For You page...")
+        # 1. Kiểm tra login status TRƯỚC KHI navigate đến TikTok
+        print(f"🔐 [{username}] Checking login status...")
+        is_logged_in = await check_login_status(page, username=username)
+        print(f"🔐 [{username}] Login status: {is_logged_in}")
+
+        # 2. Nếu chưa login, dừng ngay, không làm gì cả
+        if not is_logged_in:
+            print(f"❌ [{username}] NOT LOGGED IN - stopping all actions")
+            return
+
+        print(f"✅ [{username}] LOGGED IN - proceeding with TikTok navigation")
+
+        # 3. Chỉ khi đã login mới navigate đến TikTok
+        print(f"🌐 [{username}] Navigating to TikTok homepage...")
         try:
-            await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=90000)
+            await page.goto("https://www.tiktok.com/?lang=en", wait_until="load", timeout=90000)
             try:
                 # Chỉ đợi networkidle 30 giây thôi, nếu quá lâu thì bỏ qua
                 await asyncio.wait_for(
@@ -1065,7 +1046,7 @@ async def run_tiktok_flow(
             except asyncio.TimeoutError:
                 print(f"⚠️ [{username}] Network idle timeout - continuing anyway")
             await sleep_ms(2000, 4000)
-            print(f"✅ [{username}] For You page loaded")
+            print(f"✅ [{username}] TikTok homepage loaded")
         except Exception as nav_error:
             print(f"⚠️ [{username}] Navigation failed: {nav_error}")
             # Nếu navigate fail, thử reload page hiện tại
@@ -1078,38 +1059,6 @@ async def run_tiktok_flow(
                 return
 
         await close_cta_modal_if_any(page)
-
-        # 2. Kiểm tra login status từ page hiện tại
-        is_logged_in = await check_login_status(page, username=username)
-        print(f"🔐 [{username}] Login status: {is_logged_in}")
-
-        # 3. Nếu chưa login, dừng ngay, không làm gì cả
-        if not is_logged_in:
-            print(f"❌ [{username}] NOT LOGGED IN - stopping all actions")
-            _log_action("login.log", username, page.url, "Not logged in - stopping all actions")
-            return
-
-        print(f"✅ [{username}] LOGGED IN - proceeding with behavior actions")
-
-        # 4. Đảm bảo đang ở /foryou (đã navigate ở trên rồi, không cần nữa)
-        # Nếu chưa ở /foryou, navigate đến đó
-        if "/foryou" not in page.url.lower():
-            try:
-                print(f"🌐 [{username}] Not on For You page, navigating...")
-                await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=90000)
-                try:
-                    await asyncio.wait_for(
-                        page.wait_for_load_state("networkidle"),
-                        timeout=30.0
-                    )
-                except asyncio.TimeoutError:
-                    print(f"⚠️ [{username}] Network idle timeout during second navigation - continuing")
-                await sleep_ms(2000, 4000)
-                await close_cta_modal_if_any(page)
-            except Exception as e:
-                print(f"⚠️ [{username}] Navigation to For You failed: {e}")
-                # Nếu navigate fail thì return, không tiếp tục
-                return
 
         will_view_amount = view_amount if view_amount is not None else randi(will_view_min, will_view_max)
 
@@ -1171,7 +1120,8 @@ async def run_tiktok_flow(
 
                 # 2) Scroll behaviors - giảm dần khi fatigue cao
                 if chance(0.55 * (1 - fatigue_level * 0.5)):
-                    await human_scroll_wheel(page, randi(160, 520), step_range=(70, 150), pause_range=(120, 420))
+                    # Tăng scroll distance để đảm bảo chuyển video TikTok (cần ít nhất 600-800px)
+                    await human_scroll_wheel(page, randi(600, 900), step_range=(70, 150), pause_range=(120, 420))
                 if chance(0.10):
                     await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
 
@@ -1255,9 +1205,9 @@ async def run_tiktok_flow(
                         )
                         if follow_success:
                             await sleep_ms(1500, 3000)
-                            # Quay về /foryou
+                            # Quay về /
                             try:
-                                await page.goto("https://www.tiktok.com/foryou?lang=en", wait_until="load", timeout=60000)
+                                await page.goto("https://www.tiktok.com/?lang=en", wait_until="load", timeout=60000)
                                 try:
                                     await asyncio.wait_for(
                                         page.wait_for_load_state("networkidle"),
@@ -1268,7 +1218,7 @@ async def run_tiktok_flow(
                                 await sleep_ms(2000, 4000)
                                 await close_cta_modal_if_any(page)
                             except Exception as nav_err:
-                                print(f"⚠️ [{username}] Failed to return to For You after follow: {nav_err}")
+                                print(f"⚠️ [{username}] Failed to return to homepage after follow: {nav_err}")
                     else:
                         print(f"⚠️ [{username}] No target to follow in mode: {follow_mode}")
 

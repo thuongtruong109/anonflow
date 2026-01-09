@@ -519,7 +519,8 @@ def build_common_popup_locators(page: Page):
 
         page.locator(":text('Switch to public')"),
         page.locator(":text-matches('^Got it$', 'i')"),
-        page.locator(":text-matches('^Continue$', 'i')")
+        page.locator(":text-matches('^Continue$', 'i')"),
+        page.locator(":text-matches('^Ok$', 'i')"),
     ]
 
 async def popup_watcher(
