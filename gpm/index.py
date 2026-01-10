@@ -1,6 +1,11 @@
 import sys, asyncio, os
 from pathlib import Path
 from datetime import datetime
+import subprocess
+import psutil
+import time
+import win32gui
+import win32con
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -174,6 +179,9 @@ class GPMMainWindow(QMainWindow):
         self.task_options = {}
         self.stop_requested = False
         self.selected_profiles = []  # List of selected profile IDs
+        self.login_terminal = None
+        self.like_terminal = None
+        self.follow_terminal = None
         self.init_ui()
 
     def closeEvent(self, event):
@@ -399,7 +407,6 @@ class GPMMainWindow(QMainWindow):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create tab widget
         tab_widget = QTabWidget()
         tab_widget.setStyleSheet("""
             QTabWidget::pane {
@@ -411,9 +418,11 @@ class GPMMainWindow(QMainWindow):
                 color: #ffffff;
                 padding: 4px 16px;
                 border: 1px solid #2196F3;
-                border-bottom: none;
                 border-radius: 4px 4px 0 0;
-                margin: 0 0 4px 8px;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+                margin: 0 0 0 8px;
             }
             QTabBar::tab:selected {
                 background-color: #2196F3;
@@ -434,8 +443,6 @@ class GPMMainWindow(QMainWindow):
         self.profiles_table = QTableWidget()
         self.profiles_table.setColumnCount(2)
         self.profiles_table.setHorizontalHeaderLabels(["📁 Cookie (Read Only)", "🌐 Proxy (Editable)"])
-
-        # Style the table
         self.profiles_table.setStyleSheet("""
             QTableWidget {
                 background-color: #0a0a0a;
@@ -634,6 +641,31 @@ class GPMMainWindow(QMainWindow):
         others_layout.addStretch()
 
         tab_widget.addTab(others_tab, "Others")
+
+        # Add "View in GPM" text link in the corner of the tab widget
+        view_gpm_btn = QPushButton("View in GPM")
+        view_gpm_btn.setFlat(True)
+        view_gpm_btn.setStyleSheet("""
+            QPushButton {
+                color: #2196F3;
+                font-size: 10pt;
+                border: none;
+                background: transparent;
+                padding: 2px 8px;
+            }
+            QPushButton:hover {
+                color: #42A5F5;
+                background-color: rgba(33, 150, 243, 0.1);
+                border-radius: 3px;
+                text-decoration: underline;
+            }
+            QPushButton:pressed {
+                color: #1976D2;
+            }
+        """)
+        view_gpm_btn.setCursor(Qt.PointingHandCursor)
+        view_gpm_btn.clicked.connect(self.open_gpm_app)
+        tab_widget.setCornerWidget(view_gpm_btn, Qt.TopRightCorner)
 
         main_layout.addWidget(tab_widget)
 
@@ -1149,9 +1181,9 @@ class GPMMainWindow(QMainWindow):
 
         # Search time input (initially hidden) - giờ và phút
         self.search_time_layout = QHBoxLayout()
-        self.search_time_layout.setContentsMargins(20, 0, 0, 10)
+        self.search_time_layout.setContentsMargins(18, 0, 0, 10)
 
-        search_time_label = QLabel("⏱️ Search time:")
+        search_time_label = QLabel("⏱️ Duration:")
         search_time_label.setFont(QFont("Segoe UI", 9))
         search_time_label.setStyleSheet("color: #bbdefb;")
 
@@ -1702,6 +1734,90 @@ class GPMMainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
 
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setMaximumHeight(150)
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border-radius: 6px;
+                background-color: #000000;
+            }
+            QTabBar::tab {
+                background-color: #1a1a1a;
+                color: #e0e0e0;
+                border: 1px solid #333;
+                border-radius: 6px 6px 0 0;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+                padding: 4px 12px;
+                margin-left: 6px;
+                font-size: 8pt;
+            }
+            QTabBar::tab:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QTabBar::tab:hover {
+                background-color: #333;
+            }
+        """)
+
+        # Actions tab
+        actions_tab = QWidget()
+        actions_layout = QVBoxLayout(actions_tab)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        self.terminal = ThreadSafeTextEdit()
+        self.terminal.setReadOnly(True)
+        self.terminal.setFont(QFont("Consolas", 10))
+        actions_layout.addWidget(self.terminal)
+        self.tab_widget.addTab(actions_tab, "Actions")
+
+        # Login tab
+        login_tab = QWidget()
+        login_layout = QVBoxLayout(login_tab)
+        login_layout.setContentsMargins(0, 0, 0, 0)
+        self.login_terminal = QTextEdit()
+        self.login_terminal.setReadOnly(True)
+        self.login_terminal.setFont(QFont("Consolas", 10))
+        login_layout.addWidget(self.login_terminal)
+        self.tab_widget.addTab(login_tab, "Login")
+
+        # Like tab
+        like_tab = QWidget()
+        like_layout = QVBoxLayout(like_tab)
+        like_layout.setContentsMargins(0, 0, 0, 0)
+        self.like_terminal = QTextEdit()
+        self.like_terminal.setReadOnly(True)
+        self.like_terminal.setFont(QFont("Consolas", 10))
+        like_layout.addWidget(self.like_terminal)
+        self.tab_widget.addTab(like_tab, "Like")
+
+        # Follow tab
+        follow_tab = QWidget()
+        follow_layout = QVBoxLayout(follow_tab)
+        follow_layout.setContentsMargins(0, 0, 0, 0)
+        self.follow_terminal = QTextEdit()
+        self.follow_terminal.setReadOnly(True)
+        self.follow_terminal.setFont(QFont("Consolas", 10))
+        follow_layout.addWidget(self.follow_terminal)
+        self.tab_widget.addTab(follow_tab, "Follow")
+
+        # Load log files
+        self.load_log_files()
+
+        # Connect tab change signal to reload logs
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
+        # Load initial log for current tab if needed
+        current_tab = self.tab_widget.currentIndex()
+        if current_tab != 0:  # Not Actions tab
+            self.on_tab_changed(current_tab)
+
+        # Redirect stdout/stderr to actions terminal
+        sys.stdout = OutputRedirector(self.terminal, sys.__stdout__)
+        sys.stderr = OutputRedirector(self.terminal, sys.__stderr__)
+
         # Terminal container with absolute positioned buttons
         terminal_container = QFrame()
         terminal_container.setStyleSheet("background-color: transparent; border: none;")
@@ -1709,22 +1825,14 @@ class GPMMainWindow(QMainWindow):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
-        # Terminal fills the container
-        self.terminal = ThreadSafeTextEdit()
-        self.terminal.setReadOnly(True)
-        self.terminal.setFont(QFont("Consolas", 10))
-        self.terminal.setMaximumHeight(100)
-        container_layout.addWidget(self.terminal)
-
-        sys.stdout = OutputRedirector(self.terminal, sys.__stdout__)
-        sys.stderr = OutputRedirector(self.terminal, sys.__stderr__)
+        container_layout.addWidget(self.tab_widget)
 
         # Absolute positioned buttons at bottom right (overlay on terminal)
         self.clear_btn = ModernButton("Clear", "🗑️", "#616161")
         self.clear_btn.setParent(terminal_container)
         self.clear_btn.setFixedSize(70, 28)
         self.clear_btn.setFont(QFont("Segoe UI", 8))
-        self.clear_btn.clicked.connect(self.terminal.clear)
+        self.clear_btn.clicked.connect(self.clear_current_tab)
         self.clear_btn.raise_()  # Bring to front
 
         self.save_btn = ModernButton("Save", "💾", "#455A64")
@@ -1749,6 +1857,117 @@ class GPMMainWindow(QMainWindow):
         QTimer.singleShot(100, self.position_terminal_buttons)
 
         return group
+
+    def load_log_files(self):
+        """Load log content from files into respective tabs (initial load)"""
+        # Only load logs for non-active tabs initially
+        # Active tab will be loaded when switched to
+        pass
+
+    def clear_current_tab(self):
+        """Clear the content of the currently active tab"""
+        current_index = self.tab_widget.currentIndex()
+        if current_index == 0:  # Actions tab
+            self.terminal.clear()
+        elif current_index == 1:  # Login tab
+            self.login_terminal.clear()
+        elif current_index == 2:  # Like tab
+            self.like_terminal.clear()
+        elif current_index == 3:  # Follow tab
+            self.follow_terminal.clear()
+
+    def on_tab_changed(self, index):
+        """Reload log content when tab is activated"""
+        if index == 1:  # Login tab
+            self.load_login_log()
+        elif index == 2:  # Like tab
+            self.load_like_log()
+        elif index == 3:  # Follow tab
+            self.load_follow_log()
+
+    def load_login_log(self):
+        """Load login log content filtered by selected usernames"""
+        log_dir = Path(__file__).parent / "logs"
+        login_log_path = log_dir / "login.log"
+        if login_log_path.exists():
+            try:
+                with open(login_log_path, 'r', encoding='utf-8') as f:
+                    all_lines = f.readlines()
+
+                # Filter lines by selected usernames
+                filtered_lines = []
+                for line in all_lines:
+                    if "User: " in line:
+                        # Extract username from line like "[timestamp] User: username | ..."
+                        user_part = line.split("User: ")[1].split(" | ")[0].strip()
+                        if user_part in self.selected_profiles:
+                            filtered_lines.append(line)
+
+                content = "".join(filtered_lines)
+                if content:
+                    self.login_terminal.setPlainText(content)
+                else:
+                    self.login_terminal.setPlainText("No login logs found for selected profiles")
+            except Exception as e:
+                self.login_terminal.setPlainText(f"Error loading login.log: {e}")
+        else:
+            self.login_terminal.setPlainText("No login.log file found")
+
+    def load_like_log(self):
+        """Load like log content filtered by selected usernames"""
+        log_dir = Path(__file__).parent / "logs"
+        like_log_path = log_dir / "like.log"
+        if like_log_path.exists():
+            try:
+                with open(like_log_path, 'r', encoding='utf-8') as f:
+                    all_lines = f.readlines()
+
+                # Filter lines by selected usernames
+                filtered_lines = []
+                for line in all_lines:
+                    if "User: " in line:
+                        # Extract username from line like "[timestamp] User: username | ..."
+                        user_part = line.split("User: ")[1].split(" | ")[0].strip()
+                        if user_part in self.selected_profiles:
+                            filtered_lines.append(line)
+
+                content = "".join(filtered_lines)
+                if content:
+                    self.like_terminal.setPlainText(content)
+                else:
+                    self.like_terminal.setPlainText("No like logs found for selected profiles")
+            except Exception as e:
+                self.like_terminal.setPlainText(f"Error loading like.log: {e}")
+        else:
+            self.like_terminal.setPlainText("No like.log file found")
+
+    def load_follow_log(self):
+        """Load follow log content filtered by selected usernames"""
+        log_dir = Path(__file__).parent / "logs"
+        follow_log_path = log_dir / "follow.log"
+        if follow_log_path.exists():
+            try:
+                with open(follow_log_path, 'r', encoding='utf-8') as f:
+                    all_lines = f.readlines()
+
+                # Filter lines by selected usernames
+                filtered_lines = []
+                for line in all_lines:
+                    if "User: " in line:
+                        # Extract username from line like "[timestamp] User: username | ..."
+                        user_part = line.split("User: ")[1].split(" | ")[0].strip()
+                        if user_part in self.selected_profiles:
+                            filtered_lines.append(line)
+
+                content = "".join(filtered_lines)
+                if content:
+                    self.follow_terminal.setPlainText(content)
+                else:
+                    self.follow_terminal.setPlainText("No follow logs found for selected profiles")
+            except Exception as e:
+                self.follow_terminal.setPlainText(f"Error loading follow.log: {e}")
+        else:
+            self.follow_terminal.setPlainText("No follow.log file found")
 
     def position_terminal_buttons(self):
         if hasattr(self, 'terminal') and hasattr(self, 'clear_btn') and hasattr(self, 'save_btn'):
@@ -2374,7 +2593,6 @@ class GPMMainWindow(QMainWindow):
                                 return
 
                 else:
-                    # Use Excel data (original flow)
                     rows = read_excel()
                     safe_print(f"📊 Read {len(rows)} profiles from Excel")
 
@@ -2420,11 +2638,9 @@ class GPMMainWindow(QMainWindow):
                         # Proper asyncio event loop setup for worker thread
                         loop = None
                         try:
-                            # Create new event loop for this thread
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
 
-                            # Run playwright with proper error handling
                             loop.run_until_complete(run_all_playwright(jobs, actions))
 
                         except Exception as e:
@@ -2436,7 +2652,6 @@ class GPMMainWindow(QMainWindow):
                             # Proper cleanup to avoid segfault
                             if loop and not loop.is_closed():
                                 try:
-                                    # Cancel all pending tasks
                                     pending = asyncio.all_tasks(loop)
                                     for task in pending:
                                         task.cancel()
@@ -2446,7 +2661,6 @@ class GPMMainWindow(QMainWindow):
                                     pass
                                 finally:
                                     loop.close()
-                            # Reset event loop
                             asyncio.set_event_loop(None)
 
                 safe_print("✅ ALL DONE")
@@ -2481,15 +2695,27 @@ class GPMMainWindow(QMainWindow):
                 self.log(f"\n❌ Task failed: {message}")
 
     def save_log(self):
+        current_index = self.tab_widget.currentIndex()
+        tab_name = self.tab_widget.tabText(current_index)
+
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Log",
-            f"gpm_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            self, f"Save {tab_name} Log",
+            f"gpm_{tab_name.lower()}_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             "Text Files (*.txt)"
         )
         if file_path:
+            if current_index == 0:  # Actions tab
+                content = self.terminal.toPlainText()
+            elif current_index == 1:  # Login tab
+                content = self.login_terminal.toPlainText()
+            elif current_index == 2:  # Like tab
+                content = self.like_terminal.toPlainText()
+            elif current_index == 3:  # Follow tab
+                content = self.follow_terminal.toPlainText()
+
             with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(self.terminal.toPlainText())
-            self.log(f"💾 Log saved: {file_path}")
+                f.write(content)
+            self.log(f"💾 {tab_name} log saved: {file_path}")
 
     def create_profiles(self):
         if self.current_worker and self.current_worker.isRunning():
@@ -2544,11 +2770,47 @@ class GPMMainWindow(QMainWindow):
 
         self.run_tasks_with_actions(actions, "🔄 Update Profiles")
 
-def run_gui():
-    # Use default asyncio event loop policy (ProactorEventLoop on Windows)
-    # This is required for Playwright subprocess support
-    # DO NOT change to WindowsSelectorEventLoopPolicy as it doesn't support subprocesses
+    def open_gpm_app(self):
+        """Open GPM application"""
+        APP_PATH = r"C:\Users\admin\AppData\Local\Programs\GPMLogin\GPMLogin.exe"
+        PROCESS_NAME = "GPMLogin.exe"
 
+        def is_app_running():
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] == PROCESS_NAME:
+                    return True
+            return False
+
+        def focus_app_window():
+            def enum_windows(hwnd, result):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    if "GPM" in title:
+                        result.append(hwnd)
+
+            windows = []
+            win32gui.EnumWindows(enum_windows, windows)
+
+            if windows:
+                hwnd = windows[0]
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+
+        if not is_app_running():
+            subprocess.Popen(
+                [APP_PATH],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True
+            )
+            time.sleep(2)  # Wait for app to open
+            focus_app_window()
+        else:
+            focus_app_window()
+
+        self.log("🔍 GPM application opened/focused")
+
+
+def run_gui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 

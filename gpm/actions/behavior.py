@@ -259,7 +259,7 @@ async def visit_target_pivot_and_follow(
     target_user = target_username.lstrip("@")
     target_url = f"https://www.tiktok.com/@{target_user}"
 
-    print(f"🎯 [{username}] Attempting to follow: {target_user}")
+    print(f"🎯 [{username}] Attempting to follow: {target_user}\n")
 
     for attempt in range(max_retries):
         try:
@@ -1015,16 +1015,16 @@ async def run_tiktok_flow(
     """
 
     # DEBUG LOG
-    print(f"🎯 [{username}] run_tiktok_flow CALLED with: follow={follow}, like={like_video}, comment={comment}, view={view_video}")
+    print(f"🎯 [{username}] run_tiktok_flow CALLED with: follow={follow}, like={like_video}, comment={comment}, view={view_video}\n")
 
     # ✅ start watcher (background)
     watcher = start_popup_watcher(page)
 
     try:
         # 1. Kiểm tra login status TRƯỚC KHI navigate đến TikTok
-        print(f"🔐 [{username}] Checking login status...")
+        print(f"🔐 [{username}] Checking login status...\n")
         is_logged_in = await check_login_status(page, username=username)
-        print(f"🔐 [{username}] Login status: {is_logged_in}")
+        print(f"🔐 [{username}] Login status: {is_logged_in}\n")
 
         # 2. Nếu chưa login, dừng ngay, không làm gì cả
         if not is_logged_in:
@@ -1072,7 +1072,7 @@ async def run_tiktok_flow(
             session_engagement = random.uniform(0.6, 0.9)  # Engagement ban đầu
 
             for i in range(will_view_amount):
-                print(f"👀 [{username}] Watching video {i+1}/{will_view_amount}")
+                print(f"👀 [{username}] Watching video {i+1}/{will_view_amount}\n")
 
                 # Update fatigue (tăng dần theo thời gian, đôi khi recover)
                 fatigue_level += random.uniform(0.02, 0.08)
@@ -1089,8 +1089,8 @@ async def run_tiktok_flow(
                 # High engagement + low fatigue = watch lâu hơn
                 # Low engagement + high fatigue = watch ngắn hơn
                 engagement_multiplier = (session_engagement * (1 - fatigue_level * 0.5))
-                watch_min = int(6000 * (0.5 + engagement_multiplier * 0.5))
-                watch_max = int(20000 * (0.5 + engagement_multiplier * 0.5))
+                watch_min = int(2000 * (0.5 + engagement_multiplier * 0.5))  # Giảm từ 6000 xuống 2000
+                watch_max = int(8000 * (0.5 + engagement_multiplier * 0.5))  # Giảm từ 20000 xuống 8000
 
                 await watch_like_human(page, min_ms=watch_min, max_ms=watch_max, mouse_jitter=True)
 
@@ -1118,10 +1118,35 @@ async def run_tiktok_flow(
                             # Follow thành công tăng engagement
                             session_engagement = min(1.0, session_engagement + 0.08)
 
-                # 2) Scroll behaviors - giảm dần khi fatigue cao
+                # 1.7) Chuyển sang video tiếp theo - ĐẢM BẢO chuyển video sau khi watch xong
+                print(f"🔄 [{username}] Switching to next video after watching {i+1}")
+                await sleep_ms(800, 1500)
+
+                # Thử scroll xuống để load video mới (ưu tiên)
+                scroll_success = False
+                if chance(0.8):  # 80% cơ hội scroll
+                    try:
+                        # Scroll lớn hơn để đảm bảo chuyển video
+                        await human_scroll_wheel(page, randi(800, 1200), step_range=(80, 160), pause_range=(150, 500))
+                        await sleep_ms(1000, 2000)  # Đợi video load
+                        scroll_success = True
+                        print(f"📜 [{username}] Scrolled to next video")
+                    except Exception as e:
+                        print(f"⚠️ [{username}] Scroll failed: {e}")
+
+                # Nếu scroll không thành công, thử press space (backup)
+                if not scroll_success:
+                    try:
+                        await page.keyboard.press("ArrowDown")
+                        await sleep_ms(500, 1000)
+                        print(f"⬇️ [{username}] Used arrow down to next video")
+                    except Exception as e:
+                        print(f"⚠️ [{username}] Arrow down failed: {e}")
+
+                # 2) Scroll behaviors bổ sung - giảm dần khi fatigue cao
                 if chance(0.55 * (1 - fatigue_level * 0.5)):
-                    # Tăng scroll distance để đảm bảo chuyển video TikTok (cần ít nhất 600-800px)
-                    await human_scroll_wheel(page, randi(600, 900), step_range=(70, 150), pause_range=(120, 420))
+                    # Scroll nhỏ hơn để tương tác tự nhiên
+                    await human_scroll_wheel(page, randi(200, 400), step_range=(70, 150), pause_range=(120, 420))
                 if chance(0.10):
                     await human_scroll_wheel(page, -randi(120, 260), step_range=(60, 120), pause_range=(120, 420))
 
@@ -1195,7 +1220,7 @@ async def run_tiktok_flow(
                     elif follow_mode == "target":
                         if follow_target:
                             target_to_follow = follow_target
-                            print(f"🎯 [{username}] Target mode: Following {target_to_follow}")
+                            print(f"🎯 [{username}] Target mode: Following {target_to_follow}\n")
 
                     if target_to_follow:
                         follow_success = await visit_target_pivot_and_follow(
